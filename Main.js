@@ -8,7 +8,7 @@
         { id: 'build', name: 'Build', icon: '🏗️', script: 'tabs/build.js' },
         { id: 'recruit', name: 'Recruit', icon: '⚔️', script: 'tabs/recruit.js' },
         { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
-        { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js', disabled: true },
+        { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js' },
         { id: 'settings', name: 'Parametres', icon: '⚙️', script: 'tabs/settings.js' }
     ];
 
