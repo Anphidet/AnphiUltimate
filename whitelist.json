@@ -1,0 +1,13 @@
+{
+    "version": "1.0",
+    "lastUpdate": "2025-01-28",
+    "players": [
+        {
+            "name": "Anphidet",
+            "playerId": 0,
+            "servers": ["*"],
+            "modules": ["*"],
+            "comment": "Admin - Acces complet"
+        }
+    ]
+}
