@@ -2,13 +2,16 @@
     'use strict';
 
     const BASE_URL = 'https://anphidet.github.io/AnphiUltimate';
+    const WHITELIST_URL = `${BASE_URL}/whitelist.json`;
+    const DISCORD_INVITE = 'https://discord.gg/54xUGVpxeb';
+    const VERSION = '2.2.0';
     
     const TABS_CONFIG = [
         { id: 'farm', name: 'Farm', icon: '🌾', script: 'tabs/farm.js' },
         { id: 'build', name: 'Build', icon: '🏗️', script: 'tabs/build.js' },
         { id: 'recruit', name: 'Recruit', icon: '⚔️', script: 'tabs/recruit.js' },
-        { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
         { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js' },
+        { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
         { id: 'settings', name: 'Parametres', icon: '⚙️', script: 'tabs/settings.js' }
     ];
 
@@ -17,9 +20,12 @@
     let currentTab = 'farm';
     let panelOpen = false;
     let logs = [];
+    let userAccess = null;
+    let whitelistData = null;
 
     function getPlayerName() { try { return uw.Game.player_name || 'Inconnu'; } catch(e) { return 'Inconnu'; } }
     function getWorldName() { try { return uw.Game.world_id || window.location.hostname.split('.')[0] || 'Inconnu'; } catch(e) { return 'Inconnu'; } }
+    function getPlayerId() { try { return uw.Game.player_id || 0; } catch(e) { return 0; } }
 
     GM_addStyle(`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Philosopher:wght@400;700&display=swap');
@@ -40,6 +46,8 @@
         .ultimate-tab:hover{color:#F5DEB3;background:rgba(212,175,55,0.1)}
         .ultimate-tab.active{color:#FFD700;border-bottom-color:#D4AF37;background:rgba(212,175,55,0.15)}
         .ultimate-tab.disabled{color:#555;cursor:not-allowed;opacity:0.6}
+        .ultimate-tab.locked{color:#E57373;cursor:not-allowed;opacity:0.7}
+        .ultimate-tab.locked::after{content:'🔒';font-size:8px;margin-left:3px}
         .ultimate-tab .tab-icon{display:block;font-size:16px;margin-bottom:3px}
         .ultimate-main{display:flex;flex:1;overflow:hidden}
         .ultimate-body{padding:15px;flex:1;overflow-y:auto}
@@ -113,6 +121,24 @@
         .log-module{font-weight:bold;color:#D4AF37;margin-right:5px}
         .log-message{word-break:break-word}
         .logs-empty{text-align:center;color:#8B8B83;font-style:italic;padding:20px}
+        .access-denied-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(180deg,rgba(30,15,15,0.98) 0%,rgba(45,20,20,0.98) 100%);z-index:100001;display:flex;align-items:center;justify-content:center}
+        .access-denied-box{background:linear-gradient(180deg,rgba(50,25,25,0.95) 0%,rgba(35,18,18,0.95) 100%);border:3px solid #8B0000;border-radius:15px;padding:40px 50px;text-align:center;max-width:500px;box-shadow:0 20px 60px rgba(0,0,0,0.8)}
+        .access-denied-icon{font-size:80px;margin-bottom:20px}
+        .access-denied-title{font-family:'Cinzel',serif;font-size:32px;color:#FF6B6B;margin-bottom:15px;text-shadow:0 2px 10px rgba(255,0,0,0.3)}
+        .access-denied-text{font-size:16px;color:#BDB76B;margin-bottom:25px;line-height:1.6}
+        .access-denied-info{background:rgba(0,0,0,0.4);border-radius:8px;padding:15px;margin-bottom:25px}
+        .access-denied-info p{margin:8px 0;font-size:14px;color:#F5DEB3}
+        .access-denied-info .label{color:#8B8B83}
+        .access-denied-info .value{color:#FFD700;font-weight:bold}
+        .access-denied-info .error{color:#FF6B6B}
+        .access-denied-discord{display:inline-flex;align-items:center;gap:12px;background:linear-gradient(180deg,#5865F2 0%,#4752C4 100%);color:#fff;padding:15px 30px;border-radius:8px;text-decoration:none;font-family:'Cinzel',serif;font-size:16px;font-weight:600;transition:all 0.3s;border:2px solid #7289DA}
+        .access-denied-discord:hover{transform:translateY(-3px);box-shadow:0 10px 30px rgba(88,101,242,0.4)}
+        .access-denied-discord svg{width:24px;height:24px;fill:currentColor}
+        .access-denied-footer{margin-top:25px;font-size:12px;color:#666}
+        .locked-module-container{text-align:center;padding:60px 20px}
+        .locked-module-icon{font-size:60px;margin-bottom:15px;opacity:0.6}
+        .locked-module-title{font-family:'Cinzel',serif;font-size:22px;color:#E57373;margin-bottom:10px}
+        .locked-module-text{font-size:14px;color:#8B8B83}
     `);
 
     function log(module, msg, type = 'info') {
@@ -135,6 +161,110 @@
         }).join('');
     }
 
+    function checkWhitelist(callback) {
+        console.log('[GU] Verification whitelist...');
+        
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: `${WHITELIST_URL}?v=${Date.now()}`,
+            onload: function(response) {
+                if (response.status === 200) {
+                    try {
+                        whitelistData = JSON.parse(response.responseText);
+                        const playerName = getPlayerName().toLowerCase();
+                        const worldId = getWorldName().toLowerCase();
+                        const playerId = getPlayerId();
+                        
+                        let access = null;
+                        
+                        if (whitelistData.players) {
+                            for (const entry of whitelistData.players) {
+                                const nameMatch = entry.name.toLowerCase() === playerName || 
+                                                  entry.playerId === playerId;
+                                
+                                if (nameMatch) {
+                                    if (!entry.servers || entry.servers.length === 0 || entry.servers.includes('*')) {
+                                        access = entry;
+                                        break;
+                                    }
+                                    if (entry.servers.some(s => s.toLowerCase() === worldId)) {
+                                        access = entry;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (access) {
+                            userAccess = {
+                                allowed: true,
+                                modules: access.modules || ['*'],
+                                name: access.name,
+                                servers: access.servers || ['*']
+                            };
+                            console.log('[GU] Acces autorise:', userAccess);
+                            callback(true);
+                        } else {
+                            userAccess = { allowed: false, reason: 'not_whitelisted' };
+                            console.log('[GU] Acces refuse - non whitelist');
+                            callback(false);
+                        }
+                    } catch (e) {
+                        console.error('[GU] Erreur parsing whitelist:', e);
+                        userAccess = { allowed: true, modules: ['*'] };
+                        callback(true);
+                    }
+                } else {
+                    console.log('[GU] Whitelist non trouvee, acces autorise par defaut');
+                    userAccess = { allowed: true, modules: ['*'] };
+                    callback(true);
+                }
+            },
+            onerror: function() {
+                console.log('[GU] Erreur reseau whitelist, acces autorise');
+                userAccess = { allowed: true, modules: ['*'] };
+                callback(true);
+            }
+        });
+    }
+
+    function isModuleAllowed(moduleId) {
+        if (!userAccess || !userAccess.allowed) return false;
+        if (userAccess.modules.includes('*')) return true;
+        return userAccess.modules.includes(moduleId);
+    }
+
+    function showAccessDenied() {
+        const playerName = getPlayerName();
+        const worldId = getWorldName();
+        
+        const overlay = document.createElement('div');
+        overlay.className = 'access-denied-overlay';
+        overlay.innerHTML = `
+            <div class="access-denied-box">
+                <div class="access-denied-icon">🚫</div>
+                <h1 class="access-denied-title">ACCES NON AUTORISE</h1>
+                <p class="access-denied-text">
+                    Vous n'etes pas dans la whitelist pour utiliser ce bot.<br>
+                    Pour obtenir l'acces, veuillez faire une demande sur notre Discord.
+                </p>
+                <div class="access-denied-info">
+                    <p><span class="label">👤 Joueur:</span> <span class="value">${playerName}</span></p>
+                    <p><span class="label">🌍 Serveur:</span> <span class="value">${worldId}</span></p>
+                    <p class="error">✕ Serveur ${worldId} non autorise</p>
+                </div>
+                <a href="${DISCORD_INVITE}" target="_blank" class="access-denied-discord">
+                    <svg viewBox="0 0 24 24"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+                    Rejoindre le Discord
+                </a>
+                <div class="access-denied-footer">
+                    Grepolis Ultimate Bot V${VERSION} - Systeme de Whitelist
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
     function createUI() {
         const btn = document.createElement('div');
         btn.className = 'ultimate-bot-btn';
@@ -147,11 +277,16 @@
         panel.className = 'ultimate-panel';
         panel.id = 'ultimate-panel';
         
-        const tabsHtml = TABS_CONFIG.map(tab => 
-            `<button class="ultimate-tab${tab.id === 'farm' ? ' active' : ''}${tab.disabled ? ' disabled' : ''}" data-tab="${tab.id}">
+        const tabsHtml = TABS_CONFIG.map(tab => {
+            let classes = 'ultimate-tab';
+            if (tab.id === 'farm') classes += ' active';
+            if (tab.disabled) classes += ' disabled';
+            else if (!isModuleAllowed(tab.id) && tab.id !== 'settings') classes += ' locked';
+            
+            return `<button class="${classes}" data-tab="${tab.id}">
                 <span class="tab-icon">${tab.icon}</span>${tab.name}
-            </button>`
-        ).join('');
+            </button>`;
+        }).join('');
 
         const contentsHtml = TABS_CONFIG.map(tab => 
             `<div class="tab-content${tab.id === 'farm' ? ' active' : ''}" id="tab-${tab.id}">
@@ -161,7 +296,7 @@
 
         panel.innerHTML = `
             <div class="ultimate-header">
-                <div class="ultimate-title"><span>Ultimate Bot</span><span class="ultimate-version">V2.1.0</span></div>
+                <div class="ultimate-title"><span>Ultimate Bot</span><span class="ultimate-version">V${VERSION}</span></div>
                 <button class="ultimate-close" id="ultimate-close">X</button>
             </div>
             <div class="ultimate-tabs">${tabsHtml}</div>
@@ -177,20 +312,52 @@
 
         document.getElementById('ultimate-close').onclick = () => togglePanel();
         
-        document.querySelectorAll('.ultimate-tab:not(.disabled)').forEach(tab => {
+        document.querySelectorAll('.ultimate-tab').forEach(tab => {
             tab.onclick = () => {
+                if (tab.classList.contains('disabled')) return;
+                
                 const tabId = tab.dataset.tab;
+                const tabConfig = TABS_CONFIG.find(t => t.id === tabId);
+                
+                if (tab.classList.contains('locked')) {
+                    document.querySelectorAll('.ultimate-tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    tab.classList.add('active');
+                    const content = document.getElementById(`tab-${tabId}`);
+                    content.classList.add('active');
+                    content.innerHTML = `
+                        <div class="locked-module-container">
+                            <div class="locked-module-icon">🔒</div>
+                            <div class="locked-module-title">Module Verrouille</div>
+                            <div class="locked-module-text">
+                                Vous n'avez pas acces a ce module.<br>
+                                Contactez l'administrateur sur Discord pour debloquer.
+                            </div>
+                            <a href="${DISCORD_INVITE}" target="_blank" class="btn btn-discord" style="margin-top:20px;display:inline-block;text-decoration:none;">
+                                Rejoindre le Discord
+                            </a>
+                        </div>
+                    `;
+                    currentTab = tabId;
+                    return;
+                }
+                
                 document.querySelectorAll('.ultimate-tab').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById(`tab-${tabId}`).classList.add('active');
                 currentTab = tabId;
-                loadTab(TABS_CONFIG.find(t => t.id === tabId));
+                loadTab(tabConfig);
             };
         });
 
-        loadTab(TABS_CONFIG[0]);
+        const firstAllowedTab = TABS_CONFIG.find(t => !t.disabled && isModuleAllowed(t.id));
+        if (firstAllowedTab) {
+            loadTab(firstAllowedTab);
+        }
+        
         log('SYSTEM', 'Interface chargee', 'success');
+        log('SYSTEM', `Bienvenue ${getPlayerName()}!`, 'info');
     }
 
     function togglePanel() {
@@ -200,6 +367,7 @@
 
     function loadTab(tab) {
         if (!tab || tab.disabled) return;
+        if (!isModuleAllowed(tab.id) && tab.id !== 'settings') return;
         
         const content = document.getElementById(`tab-${tab.id}`);
         if (!content) return;
@@ -268,6 +436,7 @@
         loadedTabs,
         log,
         uw,
+        userAccess,
         reloadTab: function(tabId) {
             delete loadedTabs[tabId];
             const tab = TABS_CONFIG.find(t => t.id === tabId);
@@ -276,8 +445,10 @@
         getTabModule: function(tabId) {
             return loadedTabs[tabId];
         },
+        isModuleAllowed: isModuleAllowed,
         updateButtonState: function() {
             const btn = document.getElementById('ultimate-bot-btn');
+            if (!btn) return;
             let hasActive = false;
             for (const tabId in loadedTabs) {
                 if (loadedTabs[tabId].isActive && loadedTabs[tabId].isActive()) {
@@ -293,9 +464,16 @@
     const initCheck = setInterval(() => {
         if (typeof uw.Game !== 'undefined' && uw.ITowns && uw.ITowns.getCurrentTown()) {
             clearInterval(initCheck);
-            createUI();
+            
+            checkWhitelist(function(allowed) {
+                if (allowed) {
+                    createUI();
+                } else {
+                    showAccessDenied();
+                }
+            });
         }
     }, 1000);
 
-    console.log('%c[Grepolis Ultimate]%c Main.js charge', 'color: #4caf50; font-weight: bold;', 'color: inherit;');
+    console.log('%c[Grepolis Ultimate]%c Main.js V' + VERSION + ' charge', 'color: #4caf50; font-weight: bold;', 'color: inherit;');
 })();
