@@ -7,6 +7,7 @@ const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 const STORAGE_KEY = 'gu_calage_data';
 const INTERVALLE_VERIFICATION = 200;
 const TIMEOUT_VERIFICATION = 10000;
+const AVANCE_LANCEMENT = 15000;
 
 let calageData = {
     attaques: [],
@@ -14,6 +15,7 @@ let calageData = {
     botActif: false,
     intervalCheck: null,
     plans: [],
+    travelTimeCache: {},
     settings: { webhook: '' }
 };
 
@@ -132,6 +134,32 @@ function hasBoatsSelected(units) {
     return (units['big_transporter'] || 0) > 0 || (units['small_transporter'] || 0) > 0;
 }
 
+function getSlowestUnitType(units) {
+    let hasGround = false;
+    let hasNaval = false;
+    
+    for (const unitId in units) {
+        if (units[unitId] > 0) {
+            if (GROUND_UNITS.includes(unitId)) hasGround = true;
+            if (NAVAL_UNITS.includes(unitId)) hasNaval = true;
+        }
+    }
+    
+    if (hasGround) return 'land';
+    if (hasNaval) return 'sea';
+    return 'land';
+}
+
+function formatDuration(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
 module.render = function(container) {
     container.innerHTML = `
         <div class="main-control inactive" id="calage-control">
@@ -161,7 +189,7 @@ module.render = function(container) {
                         <input type="number" class="option-input" id="calage-ville-cible" placeholder="Ex: 6149">
                     </div>
                     <div class="option-group">
-                        <span class="option-label">Heure arrivee</span>
+                        <span class="option-label">Heure d'arrivee</span>
                         <input type="time" class="option-input" id="calage-heure-arrivee" step="1">
                     </div>
                     <div class="option-group">
@@ -172,6 +200,19 @@ module.render = function(container) {
                         </select>
                     </div>
                 </div>
+                
+                <div id="calage-travel-info" style="margin-top: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 11px; color: #BDB76B;">Temps de trajet</span>
+                        <span id="calage-travel-time" style="font-size: 13px; color: #FFD700; font-weight: bold;">--:--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                        <span style="font-size: 11px; color: #BDB76B;">Heure d'envoi</span>
+                        <span id="calage-send-time" style="font-size: 13px; color: #4CAF50; font-weight: bold;">--:--:--</span>
+                    </div>
+                    <button class="btn" id="calage-calc-travel" style="width: 100%; margin-top: 10px; font-size: 11px; padding: 8px;">Calculer temps de trajet</button>
+                </div>
+
                 <div style="margin-top: 12px;">
                     <span class="option-label">Tolerance</span>
                     <div style="display: flex; gap: 15px; margin-top: 6px;">
@@ -211,7 +252,7 @@ module.render = function(container) {
                     <div class="calage-units-grid" id="calage-naval-units"></div>
                 </div>
                 
-                <button class="btn btn-full" id="calage-btn-ajouter" style="margin-top: 15px;">+ Ajouter Attaque</button>
+                <button class="btn btn-full btn-success" id="calage-btn-ajouter" style="margin-top: 15px;">+ Ajouter Attaque</button>
             </div>
         </div>
 
@@ -221,7 +262,7 @@ module.render = function(container) {
                 <span class="section-toggle">▼</span>
             </div>
             <div class="section-content">
-                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Planifiez plusieurs attaques sur la meme cible avec des heures differentes.</p>
+                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Generer plusieurs attaques sur la meme cible avec des heures espacees.</p>
                 <div class="options-grid" style="margin-bottom: 12px;">
                     <div class="option-group">
                         <span class="option-label">Nombre d'attaques</span>
@@ -232,39 +273,39 @@ module.render = function(container) {
                         <input type="number" class="option-input" id="calage-plan-interval" value="1" min="1" max="60">
                     </div>
                 </div>
-                <button class="btn btn-full" id="calage-btn-planifier">Planifier attaques</button>
+                <button class="btn btn-full" id="calage-btn-planifier">Generer les attaques</button>
             </div>
         </div>
 
         <div class="bot-section">
             <div class="section-header">
-                <div class="section-title"><span>💾</span> Sauvegarder / Charger</div>
-                <span class="section-toggle">▼</span>
-            </div>
-            <div class="section-content">
-                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan" style="flex: 1;">
-                    <button class="btn" id="calage-save-plan">Sauver</button>
-                </div>
-                <div id="calage-plans-list" style="max-height: 120px; overflow-y: auto; margin-bottom: 12px;"></div>
-                <div style="display: flex; gap: 8px;">
-                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter</button>
-                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer</button>
-                </div>
-                <input type="file" id="calage-import-file" style="display: none;" accept=".json">
-            </div>
-        </div>
-
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>📋</span> Attaques Planifiees (<span id="calage-count">0</span>)</div>
+                <div class="section-title"><span>📋</span> Attaques en cours (<span id="calage-count">0</span>)</div>
                 <span class="section-toggle">▼</span>
             </div>
             <div class="section-content">
                 <div id="calage-liste-attaques"></div>
-                <div style="display: flex; justify-content: space-between; margin-top: 12px;">
+                <div style="display: flex; gap: 8px; margin-top: 12px;">
                     <button class="btn btn-danger" id="calage-btn-clear" style="font-size: 11px; padding: 8px 12px;">Tout supprimer</button>
                 </div>
+            </div>
+        </div>
+
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>💾</span> Plans sauvegardes</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan (ex: Raid Joueur123)" style="flex: 1;">
+                    <button class="btn" id="calage-save-plan">Sauver</button>
+                </div>
+                <div id="calage-plans-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px;"></div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter JSON</button>
+                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer JSON</button>
+                </div>
+                <input type="file" id="calage-import-file" style="display: none;" accept=".json">
             </div>
         </div>
 
@@ -316,9 +357,6 @@ module.render = function(container) {
                 border-radius: 6px;
                 padding: 10px;
                 margin-bottom: 8px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
             }
             .attaque-item.en-cours {
                 border-color: #ffc107;
@@ -327,6 +365,12 @@ module.render = function(container) {
             .attaque-item.terminee {
                 border-color: #4CAF50;
                 background: rgba(76, 175, 80, 0.1);
+            }
+            .attaque-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 6px;
             }
             .attaque-info .nom {
                 font-weight: bold;
@@ -338,29 +382,74 @@ module.render = function(container) {
                 color: #BDB76B;
                 margin-top: 3px;
             }
+            .attaque-times {
+                display: flex;
+                gap: 15px;
+                font-size: 10px;
+                color: #8B8B83;
+                margin-top: 4px;
+            }
+            .attaque-times .arrival { color: #FF9800; }
+            .attaque-times .send { color: #4CAF50; }
             .attaque-status {
                 padding: 3px 8px;
                 border-radius: 10px;
                 font-size: 10px;
                 font-weight: bold;
-                margin-right: 8px;
             }
             .status-attente { background: #6c757d; color: white; }
             .status-encours { background: #ffc107; color: black; }
             .status-succes { background: #4CAF50; color: white; }
-            .calage-actions { display: flex; gap: 4px; }
+            .calage-actions { display: flex; gap: 4px; margin-top: 8px; }
             .calage-actions button {
                 padding: 4px 8px;
                 font-size: 10px;
                 border-radius: 4px;
                 cursor: pointer;
                 border: none;
+                flex: 1;
             }
             .btn-lancer { background: #ffc107; color: black; }
+            .btn-edit { background: #2196F3; color: white; }
             .btn-suppr { background: #dc3545; color: white; }
             #calage-liste-attaques {
-                max-height: 200px;
+                max-height: 250px;
                 overflow-y: auto;
+            }
+            .plan-item {
+                background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(212,175,55,0.3);
+                border-radius: 6px;
+                padding: 10px;
+                margin-bottom: 8px;
+            }
+            .plan-item .plan-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .plan-item .plan-name {
+                font-weight: bold;
+                color: #F5DEB3;
+                font-size: 13px;
+            }
+            .plan-item .plan-meta {
+                font-size: 10px;
+                color: #8B8B83;
+                margin-top: 4px;
+            }
+            .plan-item .plan-actions {
+                display: flex;
+                gap: 4px;
+                margin-top: 8px;
+            }
+            .plan-item .plan-actions button {
+                flex: 1;
+                padding: 5px 8px;
+                font-size: 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                border: none;
             }
         </style>
     `;
@@ -379,12 +468,15 @@ module.init = function() {
     document.getElementById('toggle-calage').onchange = (e) => toggleBot(e.target.checked);
     document.getElementById('calage-btn-ajouter').onclick = ajouterAttaque;
     document.getElementById('calage-btn-clear').onclick = supprimerToutesAttaques;
-    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); updateBoatIndicator(); };
+    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); updateBoatIndicator(); updateTravelInfo(); };
+    document.getElementById('calage-ville-cible').onchange = () => updateTravelInfo();
+    document.getElementById('calage-heure-arrivee').onchange = () => updateTravelInfo();
     document.getElementById('calage-btn-planifier').onclick = planifierAttaques;
     document.getElementById('calage-save-plan').onclick = savePlan;
     document.getElementById('calage-export-plans').onclick = exportPlans;
     document.getElementById('calage-import-plans').onclick = () => document.getElementById('calage-import-file').click();
     document.getElementById('calage-import-file').onchange = (e) => importPlans(e);
+    document.getElementById('calage-calc-travel').onclick = () => calculerTempsTrajet();
 
     document.querySelectorAll('#tab-calage .section-header').forEach(h => {
         h.onclick = () => {
@@ -454,7 +546,7 @@ function demarrerBot() {
     calageData.intervalCheck = setInterval(function() {
         if (!calageData.botActif) return;
         verifierEtLancerAttaque();
-    }, 1000);
+    }, 500);
 }
 
 function arreterBot() {
@@ -536,7 +628,7 @@ function majUnitsGrid() {
                 <div class="unit_icon40x40 ${u.id} unit-icon"></div>
                 <label>${u.name}</label>
                 <span class="unit-count">(${u.count})</span>
-                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-pop="${u.pop}" onchange="updateBoatIndicator && updateBoatIndicator()">
+                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-pop="${u.pop}">
             </div>
         `).join('');
     }
@@ -549,16 +641,20 @@ function majUnitsGrid() {
                 <div class="unit_icon40x40 ${u.id} unit-icon"></div>
                 <label>${u.name}</label>
                 <span class="unit-count">(${u.count})</span>
-                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-transport="${u.isTransport}" onchange="updateBoatIndicator && updateBoatIndicator()">
+                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-transport="${u.isTransport}">
             </div>
         `).join('');
     }
     
     document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
-        inp.addEventListener('input', updateBoatIndicator);
+        inp.addEventListener('input', () => {
+            updateBoatIndicator();
+            updateTravelInfo();
+        });
     });
     
     updateBoatIndicator();
+    updateTravelInfo();
 }
 
 function updateBoatIndicator() {
@@ -604,6 +700,159 @@ function updateBoatIndicator() {
         : `Sans extension: GTrans=${boatInfo.bigBoatCap} pop, PTrans=${boatInfo.smallBoatCap} pop`;
 }
 
+function updateTravelInfo() {
+    const travelInfo = document.getElementById('calage-travel-info');
+    const travelTimeEl = document.getElementById('calage-travel-time');
+    const sendTimeEl = document.getElementById('calage-send-time');
+    
+    if (!travelInfo) return;
+    
+    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value);
+    const cibleId = parseInt(document.getElementById('calage-ville-cible')?.value);
+    const heureArrivee = document.getElementById('calage-heure-arrivee')?.value;
+    const units = getSelectedUnits();
+    
+    if (!cibleId || Object.keys(units).length === 0) {
+        travelInfo.style.display = 'none';
+        return;
+    }
+    
+    travelInfo.style.display = 'block';
+    
+    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(units)}`;
+    const cachedTime = calageData.travelTimeCache[cacheKey];
+    
+    if (cachedTime) {
+        travelTimeEl.textContent = formatDuration(cachedTime);
+        
+        if (heureArrivee) {
+            const arrivalMs = getTimeInMs(heureArrivee);
+            const sendMs = arrivalMs - cachedTime;
+            sendTimeEl.textContent = formatTime(sendMs);
+        } else {
+            sendTimeEl.textContent = '--:--:--';
+        }
+    } else {
+        travelTimeEl.textContent = 'Non calcule';
+        sendTimeEl.textContent = '--:--:--';
+    }
+}
+
+function calculerTempsTrajet() {
+    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
+    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
+    const typeAttaque = document.getElementById('calage-type-attaque').value;
+    const units = getSelectedUnits();
+    
+    if (!cibleId) {
+        log('CALAGE', 'Entrez un ID cible!', 'error');
+        return;
+    }
+    
+    if (Object.keys(units).length === 0) {
+        log('CALAGE', 'Selectionnez des unites!', 'error');
+        return;
+    }
+    
+    log('CALAGE', 'Calcul temps de trajet en cours...', 'info');
+    document.getElementById('calage-calc-travel').textContent = 'Calcul...';
+    document.getElementById('calage-calc-travel').disabled = true;
+    
+    const townId = sourceId;
+    const csrfToken = uw.Game.csrfToken;
+    const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
+
+    const jsonData = {
+        id: cibleId,
+        type: typeAttaque,
+        town_id: townId,
+        nl_init: true
+    };
+
+    for (const unitId in units) {
+        if (units.hasOwnProperty(unitId)) {
+            jsonData[unitId] = units[unitId];
+        }
+    }
+
+    uw.$.ajax({
+        url: url,
+        type: 'POST',
+        data: { json: JSON.stringify(jsonData) },
+        dataType: 'json',
+        success: function(response) {
+            if (response.json && response.json.error) {
+                log('CALAGE', 'Erreur: ' + response.json.error, 'error');
+                resetCalcButton();
+                return;
+            }
+            
+            const notifs = response.json && response.json.notifications;
+            if (!notifs) {
+                log('CALAGE', 'Pas de reponse serveur', 'error');
+                resetCalcButton();
+                return;
+            }
+
+            let mvIndex = -1;
+            for (let i = 0; i < notifs.length; i++) {
+                if (notifs[i].subject === 'MovementsUnits') {
+                    mvIndex = i;
+                    break;
+                }
+            }
+
+            if (mvIndex === -1) {
+                log('CALAGE', 'Pas de mouvement trouve', 'error');
+                resetCalcButton();
+                return;
+            }
+
+            try {
+                const paramStr = notifs[mvIndex].param_str;
+                const movementData = JSON.parse(paramStr).MovementsUnits;
+                const arrivalAt = movementData.arrival_at;
+                const commandId = movementData.command_id;
+                
+                const now = Math.floor(Date.now() / 1000);
+                const travelTimeSec = arrivalAt - now;
+                const travelTimeMs = travelTimeSec * 1000;
+                
+                const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(units)}`;
+                calageData.travelTimeCache[cacheKey] = travelTimeMs;
+                saveData();
+                
+                log('CALAGE', 'Temps de trajet: ' + formatDuration(travelTimeMs), 'success');
+                
+                annulerCommande(commandId).then(function() {
+                    log('CALAGE', 'Attaque test annulee', 'info');
+                    updateTravelInfo();
+                    resetCalcButton();
+                }).catch(function(err) {
+                    log('CALAGE', 'Erreur annulation: ' + err, 'error');
+                    resetCalcButton();
+                });
+                
+            } catch (e) {
+                log('CALAGE', 'Erreur parsing: ' + e.message, 'error');
+                resetCalcButton();
+            }
+        },
+        error: function(xhr, status, err) {
+            log('CALAGE', 'Erreur AJAX: ' + err, 'error');
+            resetCalcButton();
+        }
+    });
+}
+
+function resetCalcButton() {
+    const btn = document.getElementById('calage-calc-travel');
+    if (btn) {
+        btn.textContent = 'Calculer temps de trajet';
+        btn.disabled = false;
+    }
+}
+
 function getSelectedUnits() {
     const units = {};
     document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
@@ -625,7 +874,7 @@ function ajouterAttaque() {
     const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
 
     if (!cibleId || !heureArrivee) {
-        log('CALAGE', 'Remplir cible et heure!', 'error');
+        log('CALAGE', 'Remplir cible et heure d\'arrivee!', 'error');
         return;
     }
 
@@ -650,11 +899,24 @@ function ajouterAttaque() {
         }
     }
 
+    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(unites)}`;
+    const travelTime = calageData.travelTimeCache[cacheKey];
+    
+    if (!travelTime) {
+        log('CALAGE', 'Calculez d\'abord le temps de trajet!', 'error');
+        return;
+    }
+    
+    const heureArriveeMs = getTimeInMs(heureArrivee);
+    const heureEnvoiMs = heureArriveeMs - travelTime;
+
     const nouvelleAttaque = {
         id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
         sourceId: sourceId,
         cibleId: cibleId,
         heureArrivee: heureArrivee,
+        heureEnvoi: formatTime(heureEnvoiMs),
+        travelTime: travelTime,
         type: typeAttaque,
         unites: unites,
         toleranceMoins: toleranceMoins,
@@ -673,7 +935,7 @@ function ajouterAttaque() {
     });
     updateBoatIndicator();
 
-    log('CALAGE', 'Attaque ajoutee: ' + sourceId + ' -> ' + cibleId + ' @ ' + heureArrivee, 'success');
+    log('CALAGE', `Attaque ajoutee: envoi ${nouvelleAttaque.heureEnvoi} -> arrivee ${heureArrivee}`, 'success');
 }
 
 function planifierAttaques() {
@@ -713,19 +975,30 @@ function planifierAttaques() {
         }
     }
     
+    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(unites)}`;
+    const travelTime = calageData.travelTimeCache[cacheKey];
+    
+    if (!travelTime) {
+        log('CALAGE', 'Calculez d\'abord le temps de trajet!', 'error');
+        return;
+    }
+    
     const [hours, minutes, seconds] = heureArrivee.split(':').map(Number);
-    let baseTime = new Date();
-    baseTime.setHours(hours, minutes, seconds || 0, 0);
+    let baseArrivalTime = new Date();
+    baseArrivalTime.setHours(hours, minutes, seconds || 0, 0);
     
     for (let i = 0; i < count; i++) {
-        const attackTime = new Date(baseTime.getTime() + (i * interval * 1000));
-        const timeStr = attackTime.toTimeString().split(' ')[0];
+        const arrivalTime = new Date(baseArrivalTime.getTime() + (i * interval * 1000));
+        const arrivalStr = arrivalTime.toTimeString().split(' ')[0];
+        const sendTimeMs = arrivalTime.getTime() - travelTime;
         
         const nouvelleAttaque = {
             id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i,
             sourceId: sourceId,
             cibleId: cibleId,
-            heureArrivee: timeStr,
+            heureArrivee: arrivalStr,
+            heureEnvoi: formatTime(sendTimeMs),
+            travelTime: travelTime,
             type: typeAttaque,
             unites: { ...unites },
             toleranceMoins: toleranceMoins,
@@ -758,10 +1031,27 @@ function savePlan() {
         return;
     }
     
+    if (calageData.attaques.length === 0) {
+        log('CALAGE', 'Aucune attaque a sauvegarder', 'warning');
+        return;
+    }
+    
+    const sourceId = calageData.attaques[0].sourceId;
+    const cibleId = calageData.attaques[0].cibleId;
+    const sourceName = getVillesJoueur().find(v => v.id === sourceId)?.name || sourceId;
+    
     const plan = {
         name: planName,
         date: new Date().toISOString(),
-        attaques: calageData.attaques.map(a => ({ ...a, status: 'attente', tentatives: 0 }))
+        sourceId: sourceId,
+        sourceName: sourceName,
+        cibleId: cibleId,
+        attackCount: calageData.attaques.length,
+        attaques: calageData.attaques.map(a => ({ 
+            ...a, 
+            status: 'attente', 
+            tentatives: 0 
+        }))
     };
     
     const existingIndex = calageData.plans.findIndex(p => p.name === planName);
@@ -794,6 +1084,24 @@ function loadPlan(index) {
     log('CALAGE', `Plan "${plan.name}" charge (${plan.attaques.length} attaques)`, 'success');
 }
 
+function editPlan(index) {
+    const plan = calageData.plans[index];
+    if (!plan) return;
+    
+    calageData.attaques = plan.attaques.map(a => ({ 
+        ...a, 
+        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        status: 'attente', 
+        tentatives: 0 
+    }));
+    
+    document.getElementById('calage-plan-name').value = plan.name;
+    
+    saveData();
+    majListeAttaques();
+    log('CALAGE', `Edition du plan "${plan.name}"`, 'info');
+}
+
 function deletePlan(index) {
     const plan = calageData.plans[index];
     if (!plan) return;
@@ -809,25 +1117,35 @@ function updatePlansList() {
     if (!container) return;
     
     if (!calageData.plans.length) {
-        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:15px;">Aucun plan sauvegarde</div>';
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun plan sauvegarde<br><span style="font-size:10px;">Creez des attaques puis sauvegardez-les</span></div>';
         return;
     }
     
-    container.innerHTML = calageData.plans.map((plan, i) => `
-        <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);padding:8px 12px;margin-bottom:6px;border-radius:4px;">
-            <div>
-                <div style="font-size:12px;color:#F5DEB3;font-weight:bold;">${plan.name}</div>
-                <div style="font-size:10px;color:#8B8B83;">${plan.attaques.length} attaques</div>
+    container.innerHTML = calageData.plans.map((plan, i) => {
+        const date = new Date(plan.date).toLocaleDateString('fr-FR');
+        return `
+        <div class="plan-item">
+            <div class="plan-header">
+                <div>
+                    <div class="plan-name">${plan.name}</div>
+                    <div class="plan-meta">
+                        ${plan.sourceName || plan.sourceId} -> ${plan.cibleId} | ${plan.attackCount || plan.attaques.length} attaques | ${date}
+                    </div>
+                </div>
             </div>
-            <div style="display:flex;gap:4px;">
-                <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">Charger</button>
-                <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">X</button>
+            <div class="plan-actions">
+                <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;">Charger</button>
+                <button class="plan-edit-btn" data-index="${i}" style="background:#2196F3;color:#fff;">Modifier</button>
+                <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;">Supprimer</button>
             </div>
         </div>
-    `).join('');
+    `}).join('');
     
     container.querySelectorAll('.plan-load-btn').forEach(b => {
         b.onclick = () => loadPlan(parseInt(b.dataset.index));
+    });
+    container.querySelectorAll('.plan-edit-btn').forEach(b => {
+        b.onclick = () => editPlan(parseInt(b.dataset.index));
     });
     container.querySelectorAll('.plan-delete-btn').forEach(b => {
         b.onclick = () => deletePlan(parseInt(b.dataset.index));
@@ -836,10 +1154,11 @@ function updatePlansList() {
 
 function exportPlans() {
     const exportData = {
-        version: '2.1.0',
+        version: '2.2.0',
         exportDate: new Date().toISOString(),
         plans: calageData.plans,
-        attaques: calageData.attaques
+        attaques: calageData.attaques,
+        travelTimeCache: calageData.travelTimeCache
     };
     
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -879,14 +1198,8 @@ function importPlans(event) {
                 log('CALAGE', `${imported} plan(s) importe(s)`, 'success');
             }
             
-            if (importData.attaques && Array.isArray(importData.attaques)) {
-                importData.attaques.forEach(atk => {
-                    atk.status = 'attente';
-                    atk.tentatives = 0;
-                    atk.id = 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-                    calageData.attaques.push(atk);
-                });
-                log('CALAGE', `${importData.attaques.length} attaque(s) importee(s)`, 'success');
+            if (importData.travelTimeCache) {
+                calageData.travelTimeCache = { ...calageData.travelTimeCache, ...importData.travelTimeCache };
             }
             
             saveData();
@@ -908,7 +1221,7 @@ function majListeAttaques() {
     count.textContent = calageData.attaques.length;
 
     if (calageData.attaques.length === 0) {
-        liste.innerHTML = '<div style="text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune attaque planifiee</div>';
+        liste.innerHTML = '<div style="text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune attaque planifiee<br><span style="font-size:10px;">Configurez une attaque ci-dessus</span></div>';
         return;
     }
 
@@ -939,14 +1252,21 @@ function majListeAttaques() {
         const div = document.createElement('div');
         div.className = 'attaque-item ' + itemClass;
         div.innerHTML = `
-            <div class="attaque-info">
-                <div class="nom">${atk.sourceId} -> ${atk.cibleId}</div>
-                <div class="details">${atk.heureArrivee} | ${atk.type} | ${unitsList.slice(0, 3).join(', ')}${unitsList.length > 3 ? '...' : ''}</div>
+            <div class="attaque-header">
+                <div class="attaque-info">
+                    <div class="nom">${atk.sourceId} -> ${atk.cibleId}</div>
+                    <div class="details">${atk.type} | ${unitsList.slice(0, 3).join(', ')}${unitsList.length > 3 ? '...' : ''}</div>
+                </div>
+                <span class="attaque-status ${statusClass}">${statusText}</span>
             </div>
-            <span class="attaque-status ${statusClass}">${statusText}</span>
+            <div class="attaque-times">
+                <span>Envoi: <span class="send">${atk.heureEnvoi || '??:??:??'}</span></span>
+                <span>Arrivee: <span class="arrival">${atk.heureArrivee}</span></span>
+                <span>Trajet: ${atk.travelTime ? formatDuration(atk.travelTime) : '??'}</span>
+            </div>
             <div class="calage-actions">
-                <button class="btn-lancer" data-index="${index}" title="Lancer">▶</button>
-                <button class="btn-suppr" data-index="${index}" title="Supprimer">✕</button>
+                <button class="btn-lancer" data-index="${index}">Lancer</button>
+                <button class="btn-suppr" data-index="${index}">Supprimer</button>
             </div>
         `;
         liste.appendChild(div);
@@ -1023,9 +1343,9 @@ function verifierEtLancerAttaque() {
     for (let i = 0; i < calageData.attaques.length; i++) {
         const atk = calageData.attaques[i];
 
-        if (atk.status === 'attente') {
-            let heureArriveeMs = getTimeInMs(atk.heureArrivee);
-            let tempsRestant = heureArriveeMs - maintenant;
+        if (atk.status === 'attente' && atk.heureEnvoi) {
+            let heureEnvoiMs = getTimeInMs(atk.heureEnvoi);
+            let tempsRestant = heureEnvoiMs - maintenant;
 
             if (tempsRestant < -60000) {
                 tempsRestant += 24 * 60 * 60 * 1000;
@@ -1035,11 +1355,11 @@ function verifierEtLancerAttaque() {
             const secondesRestantes = Math.floor((tempsRestant % 60000) / 1000);
 
             if (tempsRestant > 0 && tempsRestant < 120000) {
-                majStatus('Dans ' + minutesRestantes + 'm ' + secondesRestantes + 's...');
+                majStatus('Envoi dans ' + minutesRestantes + 'm ' + secondesRestantes + 's');
             }
 
-            if (tempsRestant > 0 && tempsRestant < 45000) {
-                log('CALAGE', 'Lancement auto (T-' + Math.round(tempsRestant/1000) + 's)', 'info');
+            if (tempsRestant > 0 && tempsRestant < AVANCE_LANCEMENT) {
+                log('CALAGE', 'Lancement auto (T-' + Math.round(tempsRestant/1000) + 's avant envoi)', 'info');
                 lancerAttaque(atk);
                 return;
             }
@@ -1320,6 +1640,7 @@ function saveData() {
         attaques: calageData.attaques,
         botActif: calageData.botActif,
         plans: calageData.plans,
+        travelTimeCache: calageData.travelTimeCache,
         settings: calageData.settings
     }));
 }
@@ -1332,6 +1653,7 @@ function loadData() {
             calageData.attaques = d.attaques || [];
             calageData.botActif = d.botActif || false;
             calageData.plans = d.plans || [];
+            calageData.travelTimeCache = d.travelTimeCache || {};
             calageData.settings = d.settings || { webhook: '' };
         } catch(e) {}
     }
