@@ -15,8 +15,16 @@
             "servers": ["*"],
             "modules": ["*"],
             "comment": "Admin - Acces complet"
+        },
+        {
+            "name": "TCHAPALO",
+            "playerId": 0,
+            "servers": ["*"],
+            "modules": ["*"],
+            "comment": "Admin - Acces complet"
         }
     ]
 }
+
 
 
