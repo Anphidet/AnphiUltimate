@@ -6,7 +6,29 @@ const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 const NAMES = { main: 'Senat', lumber: 'Scierie', farm: 'Ferme', stoner: 'Carriere', storage: 'Entrepot', ironer: 'Mine', barracks: 'Caserne', temple: 'Temple', market: 'Marche', docks: 'Port', academy: 'Academie', wall: 'Remparts', hide: 'Grotte', thermal: 'Thermes', library: 'Bibliotheque', lighthouse: 'Phare', tower: 'Tour', statue: 'Statue', oracle: 'Oracle', trade_office: 'Comptoir', theater: 'Theatre' };
 const SPRITES = { main: [450, 0], storage: [250, 50], farm: [150, 0], academy: [0, 0], temple: [300, 50], barracks: [50, 0], docks: [100, 0], market: [0, 50], hide: [200, 0], lumber: [400, 0], stoner: [200, 50], ironer: [250, 0], wall: [50, 100], theater: [350, 50], thermal: [350, 0], library: [450, 50], lighthouse: [100, 50], tower: [400, 50], statue: [150, 50], oracle: [50, 50], trade_office: [300, 0] };
-const FR_TO_ID = { 'senat': 'main', 'scierie': 'lumber', 'ferme': 'farm', 'carriere': 'stoner', 'entrepot': 'storage', 'mine': 'ironer', 'caserne': 'barracks', 'temple': 'temple', 'marche': 'market', 'port': 'docks', 'academie': 'academy', 'remparts': 'wall', 'grotte': 'hide', 'thermes': 'thermal', 'bibliotheque': 'library', 'phare': 'lighthouse', 'tour': 'tower', 'statue': 'statue', 'oracle': 'oracle', 'comptoir': 'trade_office', 'theatre': 'theater' };
+const FR_TO_ID = { 
+    'senat': 'main', 'sénat': 'main',
+    'scierie': 'lumber', 
+    'ferme': 'farm', 
+    'carriere': 'stoner', 'carrière': 'stoner',
+    'entrepot': 'storage', 'entrepôt': 'storage',
+    'mine': 'ironer', "mine d'argent": 'ironer', 'argent': 'ironer',
+    'caserne': 'barracks', 
+    'temple': 'temple', 
+    'marche': 'market', 'marché': 'market',
+    'port': 'docks', 
+    'academie': 'academy', 'académie': 'academy',
+    'remparts': 'wall', 'muraille': 'wall',
+    'grotte': 'hide', 
+    'thermes': 'thermal', 
+    'bibliotheque': 'library', 'bibliothèque': 'library',
+    'phare': 'lighthouse', 
+    'tour': 'tower', 
+    'statue': 'statue', 'statue divine': 'statue',
+    'oracle': 'oracle', 
+    'comptoir': 'trade_office', 
+    'theatre': 'theater', 'théâtre': 'theater'
+};
 
 let buildData = {
     enabled: false,
@@ -248,12 +270,18 @@ function injectSenateQueue() {
     if (!$bt.length) return;
 
     const queue = buildData.queues[uw.Game.townId] || [];
-    $bt.after(`<div id="autobuild-senate-queue" style="background:linear-gradient(180deg,rgba(45,34,23,0.95),rgba(30,23,15,0.95));border:2px solid #D4AF37;border-radius:6px;margin:10px;padding:10px;">
+    
+    const $parent = $bt.closest('.gpwindow_content');
+    if ($parent.length && $parent.css('overflow') !== 'auto') {
+        $parent.css({ 'overflow-y': 'auto', 'overflow-x': 'hidden' });
+    }
+    
+    $bt.after(`<div id="autobuild-senate-queue" style="background:linear-gradient(180deg,rgba(45,34,23,0.95),rgba(30,23,15,0.95));border:2px solid #D4AF37;border-radius:6px;margin:10px;padding:10px;flex-shrink:0;">
         <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid rgba(212,175,55,0.3);">
             <span style="font-family:Cinzel,serif;font-size:12px;color:#F5DEB3;">File Auto Build</span>
             <span style="background:rgba(212,175,55,0.3);color:#FFD700;padding:2px 8px;border-radius:10px;font-size:10px;">${queue.length}</span>
         </div>
-        <div class="queue-items"></div>
+        <div class="queue-items" style="display:flex;flex-wrap:wrap;gap:4px;max-height:120px;overflow-y:auto;"></div>
     </div>`);
     refreshSenateQueue();
 }
@@ -291,14 +319,30 @@ function addBuildButtons() {
         if ($b.find('.ab-btn').length) return;
 
         const $name = $b.find('.name').first();
-        const nameStr = $name.text().trim().toLowerCase();
+        let nameStr = $name.text().trim().toLowerCase();
+        nameStr = nameStr.replace(/\s+/g, ' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        
         let bid = FR_TO_ID[nameStr];
 
         if (!bid) {
+            const nameNorm = nameStr.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
             for (const [k, v] of Object.entries(FR_TO_ID)) {
-                if (nameStr.includes(k)) { bid = v; break; }
+                const kNorm = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                if (nameNorm.includes(kNorm) || kNorm.includes(nameNorm)) { 
+                    bid = v; 
+                    break; 
+                }
             }
         }
+        
+        if (!bid) {
+            const buildingClasses = $b.attr('class') || '';
+            const classMatch = buildingClasses.match(/building_([a-z_]+)/);
+            if (classMatch && classMatch[1]) {
+                bid = classMatch[1];
+            }
+        }
+        
         if (!bid) return;
 
         const currentLvl = parseInt($b.find('.level').first().text()) || 0;
