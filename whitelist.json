@@ -8,7 +8,15 @@
             "servers": ["*"],
             "modules": ["*"],
             "comment": "Admin - Acces complet"
+        },
+        {
+            "name": "Grinta",
+            "playerId": 0,
+            "servers": ["*"],
+            "modules": ["*"],
+            "comment": "Admin - Acces complet"
         }
     ]
 }
+
 
