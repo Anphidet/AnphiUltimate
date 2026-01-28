@@ -6,9 +6,15 @@ const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 let recruitData = {
     enabled: false,
-    settings: { checkInterval: 5, recruitMode: 'queue', webhook: '' },
+    settings: { 
+        checkInterval: 5, 
+        recruitMode: 'queue',
+        storageThreshold: 80,
+        webhook: '' 
+    },
     stats: { totalRecruited: 0, recruitCycles: 0 },
     queues: {},
+    targets: {},
     plans: [],
     nextCheckTime: 0
 };
@@ -22,9 +28,11 @@ function getCurrentCityId() { try { return uw.ITowns.getCurrentTown().id; } catc
 function getCurrentTown() { try { return uw.MM.getModels().Town[getCurrentCityId()]; } catch(e) { return null; } }
 function getCurrentTownName() { try { return uw.ITowns.getCurrentTown().getName(); } catch(e) { return 'Ville inconnue'; } }
 function getResources() { try { const town = getCurrentTown(); return town?.attributes?.resources || { wood: 0, stone: 0, iron: 0 }; } catch(e) { return { wood: 0, stone: 0, iron: 0 }; } }
+function getStorageCapacity() { try { const town = getCurrentTown(); return town?.attributes?.storage || 8000; } catch(e) { return 8000; } }
 function getCurrentGod() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.god ? ct.god() : getCurrentTown()?.attributes?.god || null; } catch(e) { return null; } }
 function getResearches() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.researches ? ct.researches()?.attributes || {} : {}; } catch(e) { return {}; } }
 function hasResearch(id) { if (!id) return true; const r = getResearches(); return r[id] === true || r[id] === 1; }
+function getUnitsInTown() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.units ? ct.units() : {}; } catch(e) { return {}; } }
 
 function isUnitAvailable(unitId) {
     try {
@@ -88,7 +96,7 @@ module.render = function(container) {
                 <span class="section-toggle">▼</span>
             </div>
             <div class="section-content">
-                <div id="recruit-units-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;"></div>
+                <div id="recruit-units-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;"></div>
                 <button class="btn" style="width:100%;margin-top:12px;" id="recruit-add-queue">Ajouter a la file</button>
             </div>
         </div>
@@ -102,6 +110,47 @@ module.render = function(container) {
                     <div style="text-align:center;color:#8B8B83;font-style:italic;padding:15px;">File vide</div>
                 </div>
                 <button class="btn btn-danger" style="margin-top:12px;" id="recruit-clear-queue">Vider la file</button>
+            </div>
+        </div>
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>🎯</span> Mode Objectif (Maintien)</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <p style="font-size:11px;color:#BDB76B;margin-bottom:12px;">Definir un objectif de troupes a maintenir. Le bot recrute automatiquement quand le seuil d'entrepot est atteint.</p>
+                <div class="options-grid" style="margin-bottom:12px;">
+                    <div class="option-group">
+                        <span class="option-label">Seuil entrepot</span>
+                        <select class="option-select" id="recruit-threshold">
+                            <option value="25">25%</option>
+                            <option value="50">50%</option>
+                            <option value="75">75%</option>
+                            <option value="80">80%</option>
+                            <option value="90">90%</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="recruit-targets-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;"></div>
+                <button class="btn" style="width:100%;" id="recruit-save-targets">Sauvegarder objectifs</button>
+            </div>
+        </div>
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>💾</span> Plans de recrutement</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div style="display:flex;gap:8px;margin-bottom:12px;">
+                    <input type="text" class="option-input" id="recruit-plan-name" placeholder="Nom du plan" style="flex:1;">
+                    <button class="btn" id="recruit-save-plan">Sauver</button>
+                </div>
+                <div id="recruit-plans-list" style="max-height:120px;overflow-y:auto;margin-bottom:12px;"></div>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn" style="flex:1;" id="recruit-export-plans">Exporter</button>
+                    <button class="btn" style="flex:1;" id="recruit-import-plans">Importer</button>
+                </div>
+                <input type="file" id="recruit-import-file" style="display:none;" accept=".json">
             </div>
         </div>
         <div class="bot-section">
@@ -125,6 +174,7 @@ module.render = function(container) {
                         <select class="option-select" id="recruit-mode">
                             <option value="queue">File d'attente</option>
                             <option value="loop">Boucle infinie</option>
+                            <option value="target">Objectif (maintien)</option>
                         </select>
                     </div>
                 </div>
@@ -157,9 +207,12 @@ module.init = function() {
     document.getElementById('toggle-recruit').checked = recruitData.enabled;
     document.getElementById('recruit-interval').value = recruitData.settings.checkInterval;
     document.getElementById('recruit-mode').value = recruitData.settings.recruitMode;
+    document.getElementById('recruit-threshold').value = recruitData.settings.storageThreshold;
     updateStats();
     updateUnitsGrid();
+    updateTargetsGrid();
     updateQueueDisplay();
+    updatePlansList();
     
     document.getElementById('toggle-recruit').onchange = (e) => toggleRecruit(e.target.checked);
     document.getElementById('recruit-interval').onchange = (e) => {
@@ -171,11 +224,22 @@ module.init = function() {
     document.getElementById('recruit-mode').onchange = (e) => {
         recruitData.settings.recruitMode = e.target.value;
         saveData();
-        log('RECRUIT', 'Mode: ' + (e.target.value === 'loop' ? 'Boucle' : 'File'), 'info');
+        const modes = { queue: 'File', loop: 'Boucle', target: 'Objectif' };
+        log('RECRUIT', 'Mode: ' + modes[e.target.value], 'info');
+    };
+    document.getElementById('recruit-threshold').onchange = (e) => {
+        recruitData.settings.storageThreshold = parseInt(e.target.value);
+        saveData();
+        log('RECRUIT', 'Seuil entrepot: ' + e.target.value + '%', 'info');
     };
     document.getElementById('recruit-now').onclick = () => runRecruitCycle();
     document.getElementById('recruit-add-queue').onclick = () => addToQueue();
     document.getElementById('recruit-clear-queue').onclick = () => clearQueue();
+    document.getElementById('recruit-save-targets').onclick = () => saveTargets();
+    document.getElementById('recruit-save-plan').onclick = () => savePlan();
+    document.getElementById('recruit-export-plans').onclick = () => exportPlans();
+    document.getElementById('recruit-import-plans').onclick = () => document.getElementById('recruit-import-file').click();
+    document.getElementById('recruit-import-file').onchange = (e) => importPlans(e);
 
     document.querySelectorAll('#tab-recruit .section-header').forEach(h => {
         h.onclick = () => {
@@ -200,7 +264,9 @@ module.isActive = function() {
 
 module.onActivate = function(container) {
     updateUnitsGrid();
+    updateTargetsGrid();
     updateQueueDisplay();
+    updatePlansList();
     updateStats();
     const nameEl = document.getElementById('recruit-city-name');
     if (nameEl) nameEl.textContent = getCurrentTownName();
@@ -234,17 +300,62 @@ function updateUnitsGrid() {
     
     const units = getAvailableUnits();
     if (!units.length) {
-        grid.innerHTML = '<div style="grid-column:span 5;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucune unite disponible</div>';
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucune unite disponible</div>';
         return;
     }
     
     grid.innerHTML = units.map(u => `
-        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:10px;text-align:center;">
-            <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 6px;"></div>
-            <div style="font-size:10px;color:#BDB76B;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <input type="number" class="recruit-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:6px;">
+        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
+            <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
+            <div style="font-size:9px;color:#BDB76B;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <input type="number" class="recruit-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `).join('');
+}
+
+function updateTargetsGrid() {
+    const grid = document.getElementById('recruit-targets-grid');
+    if (!grid) return;
+    
+    const units = getAvailableUnits();
+    const cityId = getCurrentCityId();
+    const targets = recruitData.targets[cityId] || {};
+    const unitsInTown = getUnitsInTown();
+    
+    if (!units.length) {
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucune unite disponible</div>';
+        return;
+    }
+    
+    grid.innerHTML = units.map(u => {
+        const current = unitsInTown[u.id] || 0;
+        const target = targets[u.id] || 0;
+        const color = current >= target ? '#4CAF50' : '#FF9800';
+        return `
+        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
+            <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
+            <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <div style="font-size:10px;color:${color};margin-bottom:4px;">${current} / <span class="target-display" data-unit="${u.id}">${target}</span></div>
+            <input type="number" class="recruit-target-input option-input" data-unit="${u.id}" value="${target}" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
+        </div>
+    `}).join('');
+}
+
+function saveTargets() {
+    const cityId = getCurrentCityId();
+    if (!cityId) return;
+    
+    recruitData.targets[cityId] = {};
+    document.querySelectorAll('.recruit-target-input').forEach(inp => {
+        const count = parseInt(inp.value) || 0;
+        if (count > 0) {
+            recruitData.targets[cityId][inp.dataset.unit] = count;
+        }
+    });
+    
+    saveData();
+    updateTargetsGrid();
+    log('RECRUIT', 'Objectifs sauvegardes', 'success');
 }
 
 function addToQueue() {
@@ -310,6 +421,75 @@ function clearQueue() {
 }
 
 function runRecruitCycle() {
+    const mode = recruitData.settings.recruitMode;
+    
+    if (mode === 'target') {
+        runTargetMode();
+    } else {
+        runQueueMode();
+    }
+}
+
+function runTargetMode() {
+    const cityId = getCurrentCityId();
+    const cityName = getCurrentTownName();
+    
+    if (!cityId) {
+        log('RECRUIT', 'Ville non trouvee', 'error');
+        return;
+    }
+    
+    const targets = recruitData.targets[cityId];
+    if (!targets || Object.keys(targets).length === 0) {
+        log('RECRUIT', 'Aucun objectif defini', 'warning');
+        return;
+    }
+    
+    const res = getResources();
+    const storage = getStorageCapacity();
+    const threshold = recruitData.settings.storageThreshold / 100;
+    const totalRes = res.wood + res.stone + res.iron;
+    const fillRate = totalRes / (storage * 3);
+    
+    if (fillRate < threshold) {
+        log('RECRUIT', `Entrepot: ${Math.round(fillRate * 100)}% < ${recruitData.settings.storageThreshold}%`, 'info');
+        return;
+    }
+    
+    const unitsInTown = getUnitsInTown();
+    let recruited = false;
+    
+    for (const unitId in targets) {
+        const targetCount = targets[unitId];
+        const currentCount = unitsInTown[unitId] || 0;
+        const needed = targetCount - currentCount;
+        
+        if (needed <= 0) continue;
+        
+        const unitData = uw.GameData.units[unitId];
+        if (!unitData) continue;
+        
+        const cost = unitData.resources;
+        const maxAffordable = Math.min(
+            Math.floor(res.wood / cost.wood),
+            Math.floor(res.stone / cost.stone),
+            Math.floor(res.iron / cost.iron)
+        );
+        
+        const toRecruit = Math.min(needed, maxAffordable);
+        if (toRecruit <= 0) continue;
+        
+        recruitUnits(cityId, unitId, toRecruit, unitData.name);
+        recruited = true;
+        break;
+    }
+    
+    if (!recruited) {
+        log('RECRUIT', 'Objectifs atteints ou ressources insuffisantes', 'info');
+    }
+}
+
+function runQueueMode() {
     const cityId = getCurrentCityId();
     const cityName = getCurrentTownName();
     
@@ -342,12 +522,24 @@ function runRecruitCycle() {
         return;
     }
     
+    recruitUnits(cityId, order.id, order.count, unitData.name, () => {
+        if (recruitData.settings.recruitMode === 'loop') {
+            queue.push(queue.shift());
+        } else {
+            queue.shift();
+        }
+        saveData();
+        updateQueueDisplay();
+    });
+}
+
+function recruitUnits(cityId, unitId, count, unitName, callback) {
     const csrfToken = uw.Game.csrfToken;
     
     uw.$.ajax({
         type: 'POST',
         url: `/game/building_barracks?town_id=${cityId}&action=build&h=${csrfToken}`,
-        data: { json: JSON.stringify({ unit_id: order.id, amount: order.count, town_id: cityId, nl_init: true }) },
+        data: { json: JSON.stringify({ unit_id: unitId, amount: count, town_id: cityId, nl_init: true }) },
         dataType: 'json',
         success: function(response) {
             if (response?.json?.error) {
@@ -355,24 +547,175 @@ function runRecruitCycle() {
                 return;
             }
             
-            log('RECRUIT', `${order.count}x ${unitData.name} recrutes`, 'success');
-            recruitData.stats.totalRecruited += order.count;
+            log('RECRUIT', `${count}x ${unitName} recrutes`, 'success');
+            recruitData.stats.totalRecruited += count;
             recruitData.stats.recruitCycles++;
             updateStats();
-            
-            if (recruitData.settings.recruitMode === 'loop') {
-                queue.push(queue.shift());
-            } else {
-                queue.shift();
-            }
-            
+            updateTargetsGrid();
             saveData();
-            updateQueueDisplay();
+            
+            if (callback) callback();
         },
         error: function() {
             log('RECRUIT', 'Erreur AJAX', 'error');
         }
     });
+}
+
+function savePlan() {
+    const nameInput = document.getElementById('recruit-plan-name');
+    const planName = nameInput.value.trim();
+    
+    if (!planName) {
+        log('RECRUIT', 'Entrez un nom de plan', 'warning');
+        return;
+    }
+    
+    const cityId = getCurrentCityId();
+    const queue = recruitData.queues[cityId] || [];
+    const targets = recruitData.targets[cityId] || {};
+    
+    const plan = {
+        name: planName,
+        date: new Date().toISOString(),
+        queue: [...queue],
+        targets: { ...targets },
+        settings: {
+            mode: recruitData.settings.recruitMode,
+            threshold: recruitData.settings.storageThreshold
+        }
+    };
+    
+    const existingIndex = recruitData.plans.findIndex(p => p.name === planName);
+    if (existingIndex >= 0) {
+        recruitData.plans[existingIndex] = plan;
+        log('RECRUIT', `Plan "${planName}" mis a jour`, 'success');
+    } else {
+        recruitData.plans.push(plan);
+        log('RECRUIT', `Plan "${planName}" sauvegarde`, 'success');
+    }
+    
+    nameInput.value = '';
+    saveData();
+    updatePlansList();
+}
+
+function loadPlan(index) {
+    const plan = recruitData.plans[index];
+    if (!plan) return;
+    
+    const cityId = getCurrentCityId();
+    if (!cityId) return;
+    
+    recruitData.queues[cityId] = [...plan.queue];
+    recruitData.targets[cityId] = { ...plan.targets };
+    
+    if (plan.settings) {
+        recruitData.settings.recruitMode = plan.settings.mode || 'queue';
+        recruitData.settings.storageThreshold = plan.settings.threshold || 80;
+        document.getElementById('recruit-mode').value = recruitData.settings.recruitMode;
+        document.getElementById('recruit-threshold').value = recruitData.settings.storageThreshold;
+    }
+    
+    saveData();
+    updateQueueDisplay();
+    updateTargetsGrid();
+    log('RECRUIT', `Plan "${plan.name}" charge`, 'success');
+}
+
+function deletePlan(index) {
+    const plan = recruitData.plans[index];
+    if (!plan) return;
+    
+    recruitData.plans.splice(index, 1);
+    saveData();
+    updatePlansList();
+    log('RECRUIT', `Plan "${plan.name}" supprime`, 'info');
+}
+
+function updatePlansList() {
+    const container = document.getElementById('recruit-plans-list');
+    if (!container) return;
+    
+    if (!recruitData.plans.length) {
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:15px;">Aucun plan sauvegarde</div>';
+        return;
+    }
+    
+    container.innerHTML = recruitData.plans.map((plan, i) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);padding:8px 12px;margin-bottom:6px;border-radius:4px;">
+            <div>
+                <div style="font-size:12px;color:#F5DEB3;font-weight:bold;">${plan.name}</div>
+                <div style="font-size:10px;color:#8B8B83;">${Object.keys(plan.targets || {}).length} objectifs, ${(plan.queue || []).length} en file</div>
+            </div>
+            <div style="display:flex;gap:4px;">
+                <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">Charger</button>
+                <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">X</button>
+            </div>
+        </div>
+    `).join('');
+    
+    container.querySelectorAll('.plan-load-btn').forEach(b => {
+        b.onclick = () => loadPlan(parseInt(b.dataset.index));
+    });
+    container.querySelectorAll('.plan-delete-btn').forEach(b => {
+        b.onclick = () => deletePlan(parseInt(b.dataset.index));
+    });
+}
+
+function exportPlans() {
+    const exportData = {
+        version: '2.1.0',
+        exportDate: new Date().toISOString(),
+        plans: recruitData.plans
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'grepolis-recruit-plans-' + new Date().toISOString().split('T')[0] + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    log('RECRUIT', 'Plans exportes', 'success');
+}
+
+function importPlans(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const importData = JSON.parse(e.target.result);
+            
+            if (importData.plans && Array.isArray(importData.plans)) {
+                let imported = 0;
+                importData.plans.forEach(plan => {
+                    if (plan.name) {
+                        const existingIndex = recruitData.plans.findIndex(p => p.name === plan.name);
+                        if (existingIndex >= 0) {
+                            recruitData.plans[existingIndex] = plan;
+                        } else {
+                            recruitData.plans.push(plan);
+                        }
+                        imported++;
+                    }
+                });
+                
+                saveData();
+                updatePlansList();
+                log('RECRUIT', `${imported} plan(s) importe(s)`, 'success');
+            } else {
+                log('RECRUIT', 'Format de fichier invalide', 'error');
+            }
+        } catch(err) {
+            log('RECRUIT', 'Erreur import: ' + err.message, 'error');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
 }
 
 function setupTownChangeObserver() {
@@ -382,6 +725,7 @@ function setupTownChangeObserver() {
                 const nameEl = document.getElementById('recruit-city-name');
                 if (nameEl) nameEl.textContent = getCurrentTownName();
                 updateUnitsGrid();
+                updateTargetsGrid();
                 updateQueueDisplay();
             }, 500);
         });
@@ -425,6 +769,7 @@ function saveData() {
         settings: recruitData.settings,
         stats: recruitData.stats,
         queues: recruitData.queues,
+        targets: recruitData.targets,
         plans: recruitData.plans
     }));
 }
