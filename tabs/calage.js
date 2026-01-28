@@ -15,7 +15,6 @@ let calageData = {
     botActif: false,
     intervalCheck: null,
     plans: [],
-    travelTimeCache: {},
     settings: { webhook: '' }
 };
 
@@ -58,6 +57,16 @@ function calculateRequiredBoats(units, townId) {
                 totalPop += getUnitPopulation(unitId) * units[unitId];
             }
         }
+    }
+    
+    if (totalPop === 0) {
+        return {
+            totalPop: 0,
+            totalCapacity: 0,
+            hasEnoughBoats: true,
+            neededCapacity: 0,
+            percentage: 100
+        };
     }
     
     const capacity = getTransportCapacity(townId);
@@ -119,7 +128,7 @@ function getAvailableUnitsForTown(townId) {
     return available;
 }
 
-function needsBoats(units) {
+function hasGroundUnits(units) {
     for (const unitId in units) {
         if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
             if (GROUND_UNITS.includes(unitId)) {
@@ -134,30 +143,71 @@ function hasBoatsSelected(units) {
     return (units['big_transporter'] || 0) > 0 || (units['small_transporter'] || 0) > 0;
 }
 
-function getSlowestUnitType(units) {
-    let hasGround = false;
-    let hasNaval = false;
+function getSlowestUnit(units) {
+    let slowestSpeed = Infinity;
+    let slowestUnit = null;
     
     for (const unitId in units) {
         if (units[unitId] > 0) {
-            if (GROUND_UNITS.includes(unitId)) hasGround = true;
-            if (NAVAL_UNITS.includes(unitId)) hasNaval = true;
+            const unitData = uw.GameData.units[unitId];
+            if (unitData && unitData.speed) {
+                if (unitData.speed < slowestSpeed) {
+                    slowestSpeed = unitData.speed;
+                    slowestUnit = unitId;
+                }
+            }
         }
     }
     
-    if (hasGround) return 'land';
-    if (hasNaval) return 'sea';
-    return 'land';
+    return slowestUnit;
+}
+
+function getUnitSpeed(unitId) {
+    try {
+        return uw.GameData.units[unitId]?.speed || 1;
+    } catch(e) { return 1; }
+}
+
+function getTownCoords(townId) {
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (town) {
+            const x = town.getIslandCoordinateX ? town.getIslandCoordinateX() : town.attributes?.island_x;
+            const y = town.getIslandCoordinateY ? town.getIslandCoordinateY() : town.attributes?.island_y;
+            return { x, y };
+        }
+    } catch(e) {}
+    return null;
 }
 
 function formatDuration(ms) {
-    const totalSec = Math.floor(ms / 1000);
+    const totalSec = Math.floor(Math.abs(ms) / 1000);
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
     if (h > 0) return `${h}h ${m}m ${s}s`;
     if (m > 0) return `${m}m ${s}s`;
     return `${s}s`;
+}
+
+function formatTime(date) {
+    if (typeof date === 'number') {
+        date = new Date(date);
+    }
+    const h = date.getHours().toString().padStart(2, '0');
+    const m = date.getMinutes().toString().padStart(2, '0');
+    const s = date.getSeconds().toString().padStart(2, '0');
+    return h + ':' + m + ':' + s;
+}
+
+function getTimeInMs(timeStr) {
+    const parts = timeStr.split(':');
+    const hour = parseInt(parts[0], 10);
+    const minute = parseInt(parts[1], 10);
+    const second = parseInt(parts[2] || '0', 10);
+    const date = new Date();
+    date.setHours(hour, minute, second, 0);
+    return date.getTime();
 }
 
 module.render = function(container) {
@@ -203,14 +253,14 @@ module.render = function(container) {
                 
                 <div id="calage-travel-info" style="margin-top: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; display: none;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #BDB76B;">Temps de trajet</span>
+                        <span style="font-size: 11px; color: #BDB76B;">Temps de trajet (estime)</span>
                         <span id="calage-travel-time" style="font-size: 13px; color: #FFD700; font-weight: bold;">--:--</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
                         <span style="font-size: 11px; color: #BDB76B;">Heure d'envoi</span>
                         <span id="calage-send-time" style="font-size: 13px; color: #4CAF50; font-weight: bold;">--:--:--</span>
                     </div>
-                    <button class="btn" id="calage-calc-travel" style="width: 100%; margin-top: 10px; font-size: 11px; padding: 8px;">Calculer temps de trajet</button>
+                    <div id="calage-travel-status" style="margin-top: 6px; font-size: 10px; color: #8B8B83;"></div>
                 </div>
 
                 <div style="margin-top: 12px;">
@@ -262,7 +312,7 @@ module.render = function(container) {
                 <span class="section-toggle">▼</span>
             </div>
             <div class="section-content">
-                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Generer plusieurs attaques sur la meme cible avec des heures espacees.</p>
+                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Generer plusieurs attaques espacees a partir de l'heure d'arrivee.</p>
                 <div class="options-grid" style="margin-bottom: 12px;">
                     <div class="option-group">
                         <span class="option-label">Nombre d'attaques</span>
@@ -297,13 +347,13 @@ module.render = function(container) {
             </div>
             <div class="section-content">
                 <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan (ex: Raid Joueur123)" style="flex: 1;">
+                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan" style="flex: 1;">
                     <button class="btn" id="calage-save-plan">Sauver</button>
                 </div>
                 <div id="calage-plans-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 8px;">
-                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter JSON</button>
-                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer JSON</button>
+                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter</button>
+                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer</button>
                 </div>
                 <input type="file" id="calage-import-file" style="display: none;" accept=".json">
             </div>
@@ -410,7 +460,6 @@ module.render = function(container) {
                 flex: 1;
             }
             .btn-lancer { background: #ffc107; color: black; }
-            .btn-edit { background: #2196F3; color: white; }
             .btn-suppr { background: #dc3545; color: white; }
             #calage-liste-attaques {
                 max-height: 250px;
@@ -422,11 +471,6 @@ module.render = function(container) {
                 border-radius: 6px;
                 padding: 10px;
                 margin-bottom: 8px;
-            }
-            .plan-item .plan-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
             }
             .plan-item .plan-name {
                 font-weight: bold;
@@ -468,7 +512,7 @@ module.init = function() {
     document.getElementById('toggle-calage').onchange = (e) => toggleBot(e.target.checked);
     document.getElementById('calage-btn-ajouter').onclick = ajouterAttaque;
     document.getElementById('calage-btn-clear').onclick = supprimerToutesAttaques;
-    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); updateBoatIndicator(); updateTravelInfo(); };
+    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); };
     document.getElementById('calage-ville-cible').onchange = () => updateTravelInfo();
     document.getElementById('calage-heure-arrivee').onchange = () => updateTravelInfo();
     document.getElementById('calage-btn-planifier').onclick = planifierAttaques;
@@ -476,7 +520,6 @@ module.init = function() {
     document.getElementById('calage-export-plans').onclick = exportPlans;
     document.getElementById('calage-import-plans').onclick = () => document.getElementById('calage-import-file').click();
     document.getElementById('calage-import-file').onchange = (e) => importPlans(e);
-    document.getElementById('calage-calc-travel').onclick = () => calculerTempsTrajet();
 
     document.querySelectorAll('#tab-calage .section-header').forEach(h => {
         h.onclick = () => {
@@ -488,7 +531,6 @@ module.init = function() {
 
     uw.$.Observer(uw.GameEvents.town.town_switch).subscribe('gu_calage', function() {
         majUnitsGrid();
-        updateBoatIndicator();
     });
 
     if (calageData.botActif) {
@@ -669,7 +711,7 @@ function updateBoatIndicator() {
     const units = getSelectedUnits();
     const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
     
-    if (!needsBoats(units)) {
+    if (!hasGroundUnits(units)) {
         indicator.style.display = 'none';
         return;
     }
@@ -704,10 +746,10 @@ function updateTravelInfo() {
     const travelInfo = document.getElementById('calage-travel-info');
     const travelTimeEl = document.getElementById('calage-travel-time');
     const sendTimeEl = document.getElementById('calage-send-time');
+    const statusEl = document.getElementById('calage-travel-status');
     
     if (!travelInfo) return;
     
-    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value);
     const cibleId = parseInt(document.getElementById('calage-ville-cible')?.value);
     const heureArrivee = document.getElementById('calage-heure-arrivee')?.value;
     const units = getSelectedUnits();
@@ -718,139 +760,132 @@ function updateTravelInfo() {
     }
     
     travelInfo.style.display = 'block';
+    travelTimeEl.textContent = 'Calcul...';
+    sendTimeEl.textContent = '--:--:--';
+    statusEl.textContent = 'Calcul du temps de trajet...';
     
-    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(units)}`;
-    const cachedTime = calageData.travelTimeCache[cacheKey];
-    
-    if (cachedTime) {
-        travelTimeEl.textContent = formatDuration(cachedTime);
-        
-        if (heureArrivee) {
-            const arrivalMs = getTimeInMs(heureArrivee);
-            const sendMs = arrivalMs - cachedTime;
-            sendTimeEl.textContent = formatTime(sendMs);
-        } else {
-            sendTimeEl.textContent = '--:--:--';
-        }
-    } else {
-        travelTimeEl.textContent = 'Non calcule';
-        sendTimeEl.textContent = '--:--:--';
-    }
-}
-
-function calculerTempsTrajet() {
-    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
-    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
-    const typeAttaque = document.getElementById('calage-type-attaque').value;
-    const units = getSelectedUnits();
-    
-    if (!cibleId) {
-        log('CALAGE', 'Entrez un ID cible!', 'error');
-        return;
-    }
-    
-    if (Object.keys(units).length === 0) {
-        log('CALAGE', 'Selectionnez des unites!', 'error');
-        return;
-    }
-    
-    log('CALAGE', 'Calcul temps de trajet en cours...', 'info');
-    document.getElementById('calage-calc-travel').textContent = 'Calcul...';
-    document.getElementById('calage-calc-travel').disabled = true;
-    
-    const townId = sourceId;
-    const csrfToken = uw.Game.csrfToken;
-    const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
-
-    const jsonData = {
-        id: cibleId,
-        type: typeAttaque,
-        town_id: townId,
-        nl_init: true
-    };
-
-    for (const unitId in units) {
-        if (units.hasOwnProperty(unitId)) {
-            jsonData[unitId] = units[unitId];
-        }
-    }
-
-    uw.$.ajax({
-        url: url,
-        type: 'POST',
-        data: { json: JSON.stringify(jsonData) },
-        dataType: 'json',
-        success: function(response) {
-            if (response.json && response.json.error) {
-                log('CALAGE', 'Erreur: ' + response.json.error, 'error');
-                resetCalcButton();
-                return;
-            }
+    calculerTempsTrajetAuto(cibleId, units, function(travelTimeMs) {
+        if (travelTimeMs) {
+            travelTimeEl.textContent = formatDuration(travelTimeMs);
+            statusEl.textContent = 'Temps calcule depuis serveur';
+            statusEl.style.color = '#4CAF50';
             
-            const notifs = response.json && response.json.notifications;
-            if (!notifs) {
-                log('CALAGE', 'Pas de reponse serveur', 'error');
-                resetCalcButton();
-                return;
+            if (heureArrivee) {
+                const arrivalMs = getTimeInMs(heureArrivee);
+                const sendMs = arrivalMs - travelTimeMs;
+                sendTimeEl.textContent = formatTime(sendMs);
             }
-
-            let mvIndex = -1;
-            for (let i = 0; i < notifs.length; i++) {
-                if (notifs[i].subject === 'MovementsUnits') {
-                    mvIndex = i;
-                    break;
-                }
-            }
-
-            if (mvIndex === -1) {
-                log('CALAGE', 'Pas de mouvement trouve', 'error');
-                resetCalcButton();
-                return;
-            }
-
-            try {
-                const paramStr = notifs[mvIndex].param_str;
-                const movementData = JSON.parse(paramStr).MovementsUnits;
-                const arrivalAt = movementData.arrival_at;
-                const commandId = movementData.command_id;
-                
-                const now = Math.floor(Date.now() / 1000);
-                const travelTimeSec = arrivalAt - now;
-                const travelTimeMs = travelTimeSec * 1000;
-                
-                const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(units)}`;
-                calageData.travelTimeCache[cacheKey] = travelTimeMs;
-                saveData();
-                
-                log('CALAGE', 'Temps de trajet: ' + formatDuration(travelTimeMs), 'success');
-                
-                annulerCommande(commandId).then(function() {
-                    log('CALAGE', 'Attaque test annulee', 'info');
-                    updateTravelInfo();
-                    resetCalcButton();
-                }).catch(function(err) {
-                    log('CALAGE', 'Erreur annulation: ' + err, 'error');
-                    resetCalcButton();
-                });
-                
-            } catch (e) {
-                log('CALAGE', 'Erreur parsing: ' + e.message, 'error');
-                resetCalcButton();
-            }
-        },
-        error: function(xhr, status, err) {
-            log('CALAGE', 'Erreur AJAX: ' + err, 'error');
-            resetCalcButton();
+        } else {
+            travelTimeEl.textContent = 'Erreur';
+            statusEl.textContent = 'Impossible de calculer';
+            statusEl.style.color = '#E53935';
         }
     });
 }
 
-function resetCalcButton() {
-    const btn = document.getElementById('calage-calc-travel');
-    if (btn) {
-        btn.textContent = 'Calculer temps de trajet';
-        btn.disabled = false;
+let calculationTimeout = null;
+let lastCalculation = { sourceId: null, cibleId: null, units: null, result: null };
+
+function calculerTempsTrajetAuto(cibleId, units, callback) {
+    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
+    const typeAttaque = document.getElementById('calage-type-attaque')?.value || 'attack';
+    
+    const unitsKey = JSON.stringify(units);
+    if (lastCalculation.sourceId === sourceId && 
+        lastCalculation.cibleId === cibleId && 
+        lastCalculation.units === unitsKey &&
+        lastCalculation.result) {
+        callback(lastCalculation.result);
+        return;
     }
+    
+    if (calculationTimeout) {
+        clearTimeout(calculationTimeout);
+    }
+    
+    calculationTimeout = setTimeout(function() {
+        const townId = sourceId;
+        const csrfToken = uw.Game.csrfToken;
+        const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
+
+        const jsonData = {
+            id: cibleId,
+            type: typeAttaque,
+            town_id: townId,
+            nl_init: true
+        };
+
+        for (const unitId in units) {
+            if (units.hasOwnProperty(unitId)) {
+                jsonData[unitId] = units[unitId];
+            }
+        }
+
+        uw.$.ajax({
+            url: url,
+            type: 'POST',
+            data: { json: JSON.stringify(jsonData) },
+            dataType: 'json',
+            success: function(response) {
+                if (response.json && response.json.error) {
+                    log('CALAGE', 'Trajet impossible: ' + response.json.error, 'error');
+                    callback(null);
+                    return;
+                }
+                
+                const notifs = response.json && response.json.notifications;
+                if (!notifs) {
+                    log('CALAGE', 'Trajet impossible: pas de reponse serveur', 'error');
+                    callback(null);
+                    return;
+                }
+
+                let mvIndex = -1;
+                for (let i = 0; i < notifs.length; i++) {
+                    if (notifs[i].subject === 'MovementsUnits') {
+                        mvIndex = i;
+                        break;
+                    }
+                }
+
+                if (mvIndex === -1) {
+                    log('CALAGE', 'Trajet impossible: mouvement non cree', 'error');
+                    callback(null);
+                    return;
+                }
+
+                try {
+                    const paramStr = notifs[mvIndex].param_str;
+                    const movementData = JSON.parse(paramStr).MovementsUnits;
+                    const arrivalAt = movementData.arrival_at;
+                    const commandId = movementData.command_id;
+                    
+                    const now = Math.floor(Date.now() / 1000);
+                    const travelTimeSec = arrivalAt - now;
+                    const travelTimeMs = travelTimeSec * 1000;
+                    
+                    lastCalculation = {
+                        sourceId: sourceId,
+                        cibleId: cibleId,
+                        units: unitsKey,
+                        result: travelTimeMs
+                    };
+                    
+                    annulerCommande(commandId).then(function() {
+                        callback(travelTimeMs);
+                    }).catch(function() {
+                        callback(travelTimeMs);
+                    });
+                    
+                } catch (e) {
+                    callback(null);
+                }
+            },
+            error: function() {
+                callback(null);
+            }
+        });
+    }, 500);
 }
 
 function getSelectedUnits() {
@@ -886,29 +921,31 @@ function ajouterAttaque() {
         return;
     }
 
-    if (needsBoats(unites) && !hasBoatsSelected(unites)) {
-        log('CALAGE', 'Ajoutez des bateaux pour transporter vos troupes!', 'error');
+    if (hasGroundUnits(unites) && !hasBoatsSelected(unites)) {
+        log('CALAGE', 'Attention: troupes terrestres sans bateaux!', 'warning');
+    }
+
+    const travelTimeEl = document.getElementById('calage-travel-time');
+    const travelText = travelTimeEl?.textContent;
+    
+    if (!travelText || travelText === 'Calcul...' || travelText === '--:--') {
+        log('CALAGE', 'Attendez le calcul du temps de trajet...', 'warning');
         return;
     }
     
-    if (needsBoats(unites)) {
-        const boatInfo = calculateRequiredBoats(unites, sourceId);
-        if (!boatInfo.hasEnoughBoats) {
-            log('CALAGE', `Capacite insuffisante! (${boatInfo.totalCapacity}/${boatInfo.totalPop})`, 'error');
-            return;
-        }
+    if (travelText === 'Erreur') {
+        log('CALAGE', 'Trajet impossible! Verifiez la cible et les unites.', 'error');
+        return;
     }
-
-    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(unites)}`;
-    const travelTime = calageData.travelTimeCache[cacheKey];
     
-    if (!travelTime) {
-        log('CALAGE', 'Calculez d\'abord le temps de trajet!', 'error');
+    const travelTimeMs = lastCalculation.result;
+    if (!travelTimeMs) {
+        log('CALAGE', 'Temps de trajet non disponible - trajet impossible?', 'error');
         return;
     }
     
     const heureArriveeMs = getTimeInMs(heureArrivee);
-    const heureEnvoiMs = heureArriveeMs - travelTime;
+    const heureEnvoiMs = heureArriveeMs - travelTimeMs;
 
     const nouvelleAttaque = {
         id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
@@ -916,7 +953,7 @@ function ajouterAttaque() {
         cibleId: cibleId,
         heureArrivee: heureArrivee,
         heureEnvoi: formatTime(heureEnvoiMs),
-        travelTime: travelTime,
+        travelTime: travelTimeMs,
         type: typeAttaque,
         unites: unites,
         toleranceMoins: toleranceMoins,
@@ -934,6 +971,7 @@ function ajouterAttaque() {
         inp.value = 0;
     });
     updateBoatIndicator();
+    updateTravelInfo();
 
     log('CALAGE', `Attaque ajoutee: envoi ${nouvelleAttaque.heureEnvoi} -> arrivee ${heureArrivee}`, 'success');
 }
@@ -962,24 +1000,13 @@ function planifierAttaques() {
         return;
     }
     
-    if (needsBoats(unites) && !hasBoatsSelected(unites)) {
-        log('CALAGE', 'Ajoutez des bateaux!', 'error');
-        return;
+    if (hasGroundUnits(unites) && !hasBoatsSelected(unites)) {
+        log('CALAGE', 'Attention: troupes terrestres sans bateaux!', 'warning');
     }
     
-    if (needsBoats(unites)) {
-        const boatInfo = calculateRequiredBoats(unites, sourceId);
-        if (!boatInfo.hasEnoughBoats) {
-            log('CALAGE', `Capacite insuffisante!`, 'error');
-            return;
-        }
-    }
-    
-    const cacheKey = `${sourceId}_${cibleId}_${getSlowestUnitType(unites)}`;
-    const travelTime = calageData.travelTimeCache[cacheKey];
-    
-    if (!travelTime) {
-        log('CALAGE', 'Calculez d\'abord le temps de trajet!', 'error');
+    const travelTimeMs = lastCalculation.result;
+    if (!travelTimeMs) {
+        log('CALAGE', 'Trajet impossible ou calcul en cours', 'error');
         return;
     }
     
@@ -990,7 +1017,7 @@ function planifierAttaques() {
     for (let i = 0; i < count; i++) {
         const arrivalTime = new Date(baseArrivalTime.getTime() + (i * interval * 1000));
         const arrivalStr = arrivalTime.toTimeString().split(' ')[0];
-        const sendTimeMs = arrivalTime.getTime() - travelTime;
+        const sendTimeMs = arrivalTime.getTime() - travelTimeMs;
         
         const nouvelleAttaque = {
             id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i,
@@ -998,7 +1025,7 @@ function planifierAttaques() {
             cibleId: cibleId,
             heureArrivee: arrivalStr,
             heureEnvoi: formatTime(sendTimeMs),
-            travelTime: travelTime,
+            travelTime: travelTimeMs,
             type: typeAttaque,
             unites: { ...unites },
             toleranceMoins: toleranceMoins,
@@ -1018,6 +1045,7 @@ function planifierAttaques() {
         inp.value = 0;
     });
     updateBoatIndicator();
+    updateTravelInfo();
     
     log('CALAGE', `${count} attaques planifiees (intervalle ${interval}s)`, 'success');
 }
@@ -1084,24 +1112,6 @@ function loadPlan(index) {
     log('CALAGE', `Plan "${plan.name}" charge (${plan.attaques.length} attaques)`, 'success');
 }
 
-function editPlan(index) {
-    const plan = calageData.plans[index];
-    if (!plan) return;
-    
-    calageData.attaques = plan.attaques.map(a => ({ 
-        ...a, 
-        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-        status: 'attente', 
-        tentatives: 0 
-    }));
-    
-    document.getElementById('calage-plan-name').value = plan.name;
-    
-    saveData();
-    majListeAttaques();
-    log('CALAGE', `Edition du plan "${plan.name}"`, 'info');
-}
-
 function deletePlan(index) {
     const plan = calageData.plans[index];
     if (!plan) return;
@@ -1117,7 +1127,7 @@ function updatePlansList() {
     if (!container) return;
     
     if (!calageData.plans.length) {
-        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun plan sauvegarde<br><span style="font-size:10px;">Creez des attaques puis sauvegardez-les</span></div>';
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun plan sauvegarde</div>';
         return;
     }
     
@@ -1125,17 +1135,12 @@ function updatePlansList() {
         const date = new Date(plan.date).toLocaleDateString('fr-FR');
         return `
         <div class="plan-item">
-            <div class="plan-header">
-                <div>
-                    <div class="plan-name">${plan.name}</div>
-                    <div class="plan-meta">
-                        ${plan.sourceName || plan.sourceId} -> ${plan.cibleId} | ${plan.attackCount || plan.attaques.length} attaques | ${date}
-                    </div>
-                </div>
+            <div class="plan-name">${plan.name}</div>
+            <div class="plan-meta">
+                ${plan.sourceName || plan.sourceId} -> ${plan.cibleId} | ${plan.attackCount || plan.attaques.length} attaques | ${date}
             </div>
             <div class="plan-actions">
                 <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;">Charger</button>
-                <button class="plan-edit-btn" data-index="${i}" style="background:#2196F3;color:#fff;">Modifier</button>
                 <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;">Supprimer</button>
             </div>
         </div>
@@ -1143,9 +1148,6 @@ function updatePlansList() {
     
     container.querySelectorAll('.plan-load-btn').forEach(b => {
         b.onclick = () => loadPlan(parseInt(b.dataset.index));
-    });
-    container.querySelectorAll('.plan-edit-btn').forEach(b => {
-        b.onclick = () => editPlan(parseInt(b.dataset.index));
     });
     container.querySelectorAll('.plan-delete-btn').forEach(b => {
         b.onclick = () => deletePlan(parseInt(b.dataset.index));
@@ -1157,8 +1159,7 @@ function exportPlans() {
         version: '2.2.0',
         exportDate: new Date().toISOString(),
         plans: calageData.plans,
-        attaques: calageData.attaques,
-        travelTimeCache: calageData.travelTimeCache
+        attaques: calageData.attaques
     };
     
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -1198,10 +1199,6 @@ function importPlans(event) {
                 log('CALAGE', `${imported} plan(s) importe(s)`, 'success');
             }
             
-            if (importData.travelTimeCache) {
-                calageData.travelTimeCache = { ...calageData.travelTimeCache, ...importData.travelTimeCache };
-            }
-            
             saveData();
             updatePlansList();
             majListeAttaques();
@@ -1221,7 +1218,7 @@ function majListeAttaques() {
     count.textContent = calageData.attaques.length;
 
     if (calageData.attaques.length === 0) {
-        liste.innerHTML = '<div style="text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune attaque planifiee<br><span style="font-size:10px;">Configurez une attaque ci-dessus</span></div>';
+        liste.innerHTML = '<div style="text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune attaque planifiee</div>';
         return;
     }
 
@@ -1313,26 +1310,6 @@ function lancerAttaqueMaintenant(index) {
 
     log('CALAGE', 'Lancement manuel: ' + atk.sourceId + ' -> ' + atk.cibleId, 'info');
     lancerAttaque(atk);
-}
-
-function getTimeInMs(timeStr) {
-    const parts = timeStr.split(':');
-    const hour = parseInt(parts[0], 10);
-    const minute = parseInt(parts[1], 10);
-    const second = parseInt(parts[2] || '0', 10);
-    const date = new Date();
-    date.setHours(hour, minute, second, 0);
-    return date.getTime();
-}
-
-function formatTime(date) {
-    if (typeof date === 'number') {
-        date = new Date(date);
-    }
-    const h = date.getHours().toString().padStart(2, '0');
-    const m = date.getMinutes().toString().padStart(2, '0');
-    const s = date.getSeconds().toString().padStart(2, '0');
-    return h + ':' + m + ':' + s;
 }
 
 function verifierEtLancerAttaque() {
@@ -1640,7 +1617,6 @@ function saveData() {
         attaques: calageData.attaques,
         botActif: calageData.botActif,
         plans: calageData.plans,
-        travelTimeCache: calageData.travelTimeCache,
         settings: calageData.settings
     }));
 }
@@ -1653,7 +1629,6 @@ function loadData() {
             calageData.attaques = d.attaques || [];
             calageData.botActif = d.botActif || false;
             calageData.plans = d.plans || [];
-            calageData.travelTimeCache = d.travelTimeCache || {};
             calageData.settings = d.settings || { webhook: '' };
         } catch(e) {}
     }
