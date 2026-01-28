@@ -13,38 +13,124 @@ let calageData = {
     attaqueEnCours: null,
     botActif: false,
     intervalCheck: null,
+    plans: [],
     settings: { webhook: '' }
 };
 
-const UNIT_TYPES = [
-    { id: 'sword', name: 'Epee' },
-    { id: 'slinger', name: 'Frond' },
-    { id: 'archer', name: 'Archer' },
-    { id: 'hoplite', name: 'Hopli' },
-    { id: 'rider', name: 'Caval' },
-    { id: 'chariot', name: 'Char' },
-    { id: 'catapult', name: 'Cata' },
-    { id: 'minotaur', name: 'Mino' },
-    { id: 'manticore', name: 'Manti' },
-    { id: 'centaur', name: 'Cent' },
-    { id: 'pegasus', name: 'Pega' },
-    { id: 'harpy', name: 'Harpie' },
-    { id: 'medusa', name: 'Meduse' },
-    { id: 'zyklop', name: 'Cyclo' },
-    { id: 'cerberus', name: 'Cerb' },
-    { id: 'fury', name: 'Furie' },
-    { id: 'griffin', name: 'Griff' },
-    { id: 'calydonian_boar', name: 'Sangl' },
-    { id: 'godsent', name: 'Envoye' },
-    { id: 'big_transporter', name: 'GTrans' },
-    { id: 'bireme', name: 'Bireme' },
-    { id: 'attack_ship', name: 'Brulot' },
-    { id: 'demolition_ship', name: 'Demo' },
-    { id: 'small_transporter', name: 'PTrans' },
-    { id: 'trireme', name: 'Trirem' },
-    { id: 'colonize_ship', name: 'Colon' },
-    { id: 'sea_monster', name: 'Hydre' }
-];
+const GROUND_UNITS = ['sword', 'slinger', 'archer', 'hoplite', 'rider', 'chariot', 'catapult', 'minotaur', 'manticore', 'centaur', 'pegasus', 'harpy', 'medusa', 'zyklop', 'cerberus', 'fury', 'griffin', 'calydonian_boar', 'godsent', 'satyr', 'spartoi', 'ladon', 'siren'];
+const NAVAL_UNITS = ['big_transporter', 'bireme', 'attack_ship', 'demolition_ship', 'small_transporter', 'trireme', 'colonize_ship', 'sea_monster'];
+const TRANSPORT_SHIPS = ['big_transporter', 'small_transporter'];
+
+function getCurrentCityId() { try { return uw.ITowns.getCurrentTown().id; } catch(e) { return null; } }
+function getResearches(townId) { 
+    try { 
+        const town = uw.ITowns.getTown(townId || uw.Game.townId);
+        return town?.researches ? town.researches()?.attributes || {} : {}; 
+    } catch(e) { return {}; } 
+}
+function hasResearch(townId, researchId) {
+    const r = getResearches(townId);
+    return r[researchId] === true || r[researchId] === 1;
+}
+
+function getUnitPopulation(unitId) {
+    try {
+        const unitData = uw.GameData.units[unitId];
+        return unitData?.population || 1;
+    } catch(e) { return 1; }
+}
+
+function getTransportCapacity(townId) {
+    const hasBoatExpansion = hasResearch(townId, 'ship_transport');
+    return {
+        big_transporter: hasBoatExpansion ? 26 : 20,
+        small_transporter: hasBoatExpansion ? 13 : 10
+    };
+}
+
+function calculateRequiredBoats(units, townId) {
+    let totalPop = 0;
+    for (const unitId in units) {
+        if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
+            if (GROUND_UNITS.includes(unitId)) {
+                totalPop += getUnitPopulation(unitId) * units[unitId];
+            }
+        }
+    }
+    
+    const capacity = getTransportCapacity(townId);
+    const bigCap = capacity.big_transporter;
+    const smallCap = capacity.small_transporter;
+    
+    const bigBoats = units['big_transporter'] || 0;
+    const smallBoats = units['small_transporter'] || 0;
+    const totalCapacity = (bigBoats * bigCap) + (smallBoats * smallCap);
+    
+    return {
+        totalPop,
+        totalCapacity,
+        bigBoatCap: bigCap,
+        smallBoatCap: smallCap,
+        hasEnoughBoats: totalCapacity >= totalPop,
+        neededCapacity: Math.max(0, totalPop - totalCapacity),
+        percentage: totalPop > 0 ? Math.min(100, Math.round((totalCapacity / totalPop) * 100)) : 100
+    };
+}
+
+function getUnitesDispo(townId) {
+    try {
+        if (uw.ITowns && uw.ITowns.getTown) {
+            const town = uw.ITowns.getTown(townId || uw.Game.townId);
+            if (town && town.units) {
+                return town.units();
+            }
+        }
+    } catch (e) {}
+    return {};
+}
+
+function getAvailableUnitsForTown(townId) {
+    const units = getUnitesDispo(townId);
+    const available = [];
+    
+    for (const unitId in units) {
+        if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
+            const unitData = uw.GameData.units[unitId];
+            if (unitData && unitId !== 'militia') {
+                available.push({
+                    id: unitId,
+                    name: unitData.name,
+                    count: units[unitId],
+                    isNaval: NAVAL_UNITS.includes(unitId),
+                    isTransport: TRANSPORT_SHIPS.includes(unitId),
+                    pop: unitData.population || 1
+                });
+            }
+        }
+    }
+    
+    available.sort((a, b) => {
+        if (a.isNaval !== b.isNaval) return a.isNaval ? 1 : -1;
+        return a.name.localeCompare(b.name);
+    });
+    
+    return available;
+}
+
+function needsBoats(units) {
+    for (const unitId in units) {
+        if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
+            if (GROUND_UNITS.includes(unitId)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function hasBoatsSelected(units) {
+    return (units['big_transporter'] || 0) > 0 || (units['small_transporter'] || 0) > 0;
+}
 
 module.render = function(container) {
     container.innerHTML = `
@@ -97,11 +183,75 @@ module.render = function(container) {
                         </label>
                     </div>
                 </div>
-                <div style="margin-top: 15px;">
-                    <span class="option-label">Unites a envoyer</span>
-                    <div class="calage-units-grid" id="calage-units-grid"></div>
+                
+                <div id="calage-boat-indicator" style="margin-top: 15px; display: none;">
+                    <span class="option-label">Transport des troupes</span>
+                    <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; margin-top: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 11px; color: #BDB76B;">Capacite bateaux</span>
+                            <span id="calage-boat-text" style="font-size: 11px; color: #F5DEB3;">0 / 0 pop</span>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.4); border-radius: 4px; height: 12px; overflow: hidden;">
+                            <div id="calage-boat-bar" style="height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A); width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="calage-boat-warning" style="margin-top: 6px; font-size: 10px; color: #FF9800; display: none;">
+                            Ajoutez des bateaux de transport!
+                        </div>
+                        <div id="calage-research-info" style="margin-top: 4px; font-size: 9px; color: #8B8B83;"></div>
+                    </div>
                 </div>
+                
+                <div style="margin-top: 15px;">
+                    <span class="option-label">Troupes terrestres</span>
+                    <div class="calage-units-grid" id="calage-ground-units"></div>
+                </div>
+                
+                <div style="margin-top: 15px;">
+                    <span class="option-label">Flotte</span>
+                    <div class="calage-units-grid" id="calage-naval-units"></div>
+                </div>
+                
                 <button class="btn btn-full" id="calage-btn-ajouter" style="margin-top: 15px;">+ Ajouter Attaque</button>
+            </div>
+        </div>
+
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>📅</span> Planificateur</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Planifiez plusieurs attaques sur la meme cible avec des heures differentes.</p>
+                <div class="options-grid" style="margin-bottom: 12px;">
+                    <div class="option-group">
+                        <span class="option-label">Nombre d'attaques</span>
+                        <input type="number" class="option-input" id="calage-plan-count" value="1" min="1" max="50">
+                    </div>
+                    <div class="option-group">
+                        <span class="option-label">Intervalle (sec)</span>
+                        <input type="number" class="option-input" id="calage-plan-interval" value="1" min="1" max="60">
+                    </div>
+                </div>
+                <button class="btn btn-full" id="calage-btn-planifier">Planifier attaques</button>
+            </div>
+        </div>
+
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>💾</span> Sauvegarder / Charger</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan" style="flex: 1;">
+                    <button class="btn" id="calage-save-plan">Sauver</button>
+                </div>
+                <div id="calage-plans-list" style="max-height: 120px; overflow-y: auto; margin-bottom: 12px;"></div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter</button>
+                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer</button>
+                </div>
+                <input type="file" id="calage-import-file" style="display: none;" accept=".json">
             </div>
         </div>
 
@@ -122,29 +272,43 @@ module.render = function(container) {
             .calage-units-grid {
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
-                gap: 8px;
-                margin-top: 10px;
+                gap: 6px;
+                margin-top: 8px;
             }
             .calage-unit-input {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
+                background: rgba(0,0,0,0.2);
+                border: 1px solid rgba(212,175,55,0.2);
+                border-radius: 4px;
+                padding: 6px;
+            }
+            .calage-unit-input .unit-icon {
+                width: 40px;
+                height: 40px;
+                margin-bottom: 2px;
             }
             .calage-unit-input label {
-                font-size: 9px;
+                font-size: 8px;
                 color: #BDB76B;
-                margin-bottom: 3px;
+                margin-bottom: 2px;
                 text-align: center;
             }
+            .calage-unit-input .unit-count {
+                font-size: 9px;
+                color: #8BC34A;
+                margin-bottom: 3px;
+            }
             .calage-unit-input input {
-                width: 50px;
-                padding: 4px;
+                width: 45px;
+                padding: 3px;
                 text-align: center;
                 border: 1px solid #8B6914;
-                border-radius: 4px;
+                border-radius: 3px;
                 background: #2D2419;
                 color: #F5DEB3;
-                font-size: 11px;
+                font-size: 10px;
             }
             .attaque-item {
                 background: rgba(0,0,0,0.3);
@@ -210,11 +374,17 @@ module.init = function() {
     majVillesSelect();
     majUnitsGrid();
     majListeAttaques();
+    updatePlansList();
 
     document.getElementById('toggle-calage').onchange = (e) => toggleBot(e.target.checked);
     document.getElementById('calage-btn-ajouter').onclick = ajouterAttaque;
     document.getElementById('calage-btn-clear').onclick = supprimerToutesAttaques;
-    document.getElementById('calage-ville-source').onchange = majUnitsGrid;
+    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); updateBoatIndicator(); };
+    document.getElementById('calage-btn-planifier').onclick = planifierAttaques;
+    document.getElementById('calage-save-plan').onclick = savePlan;
+    document.getElementById('calage-export-plans').onclick = exportPlans;
+    document.getElementById('calage-import-plans').onclick = () => document.getElementById('calage-import-file').click();
+    document.getElementById('calage-import-file').onchange = (e) => importPlans(e);
 
     document.querySelectorAll('#tab-calage .section-header').forEach(h => {
         h.onclick = () => {
@@ -226,6 +396,7 @@ module.init = function() {
 
     uw.$.Observer(uw.GameEvents.town.town_switch).subscribe('gu_calage', function() {
         majUnitsGrid();
+        updateBoatIndicator();
     });
 
     if (calageData.botActif) {
@@ -243,6 +414,7 @@ module.onActivate = function(container) {
     majVillesSelect();
     majUnitsGrid();
     majListeAttaques();
+    updatePlansList();
 };
 
 function toggleBot(enabled) {
@@ -327,18 +499,6 @@ function getVillesJoueur() {
     return villes;
 }
 
-function getUnitesDispo(townId) {
-    try {
-        if (uw.ITowns && uw.ITowns.getTown) {
-            const town = uw.ITowns.getTown(townId || uw.Game.townId);
-            if (town && town.units) {
-                return town.units();
-            }
-        }
-    } catch (e) {}
-    return {};
-}
-
 function majVillesSelect() {
     const select = document.getElementById('calage-ville-source');
     if (!select) return;
@@ -358,22 +518,386 @@ function majVillesSelect() {
 }
 
 function majUnitsGrid() {
-    const grid = document.getElementById('calage-units-grid');
-    if (!grid) return;
+    const groundGrid = document.getElementById('calage-ground-units');
+    const navalGrid = document.getElementById('calage-naval-units');
+    if (!groundGrid || !navalGrid) return;
     
     const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
-    const unites = getUnitesDispo(sourceId);
-
-    grid.innerHTML = '';
-
-    UNIT_TYPES.forEach(function(unit) {
-        const dispo = unites[unit.id] || 0;
-        const div = document.createElement('div');
-        div.className = 'calage-unit-input';
-        div.innerHTML = '<label>' + unit.name + ' (' + dispo + ')</label>' +
-            '<input type="number" id="unit-' + unit.id + '" min="0" max="' + dispo + '" value="0" data-unit="' + unit.id + '">';
-        grid.appendChild(div);
+    const availableUnits = getAvailableUnitsForTown(sourceId);
+    
+    const groundUnits = availableUnits.filter(u => !u.isNaval);
+    const navalUnits = availableUnits.filter(u => u.isNaval);
+    
+    if (groundUnits.length === 0) {
+        groundGrid.innerHTML = '<div style="grid-column: span 4; text-align: center; color: #8B8B83; padding: 15px; font-style: italic;">Aucune troupe terrestre</div>';
+    } else {
+        groundGrid.innerHTML = groundUnits.map(u => `
+            <div class="calage-unit-input">
+                <div class="unit_icon40x40 ${u.id} unit-icon"></div>
+                <label>${u.name}</label>
+                <span class="unit-count">(${u.count})</span>
+                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-pop="${u.pop}" onchange="updateBoatIndicator && updateBoatIndicator()">
+            </div>
+        `).join('');
+    }
+    
+    if (navalUnits.length === 0) {
+        navalGrid.innerHTML = '<div style="grid-column: span 4; text-align: center; color: #8B8B83; padding: 15px; font-style: italic;">Aucune flotte</div>';
+    } else {
+        navalGrid.innerHTML = navalUnits.map(u => `
+            <div class="calage-unit-input" style="${u.isTransport ? 'border-color: #4CAF50;' : ''}">
+                <div class="unit_icon40x40 ${u.id} unit-icon"></div>
+                <label>${u.name}</label>
+                <span class="unit-count">(${u.count})</span>
+                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-transport="${u.isTransport}" onchange="updateBoatIndicator && updateBoatIndicator()">
+            </div>
+        `).join('');
+    }
+    
+    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
+        inp.addEventListener('input', updateBoatIndicator);
     });
+    
+    updateBoatIndicator();
+}
+
+function updateBoatIndicator() {
+    const indicator = document.getElementById('calage-boat-indicator');
+    const bar = document.getElementById('calage-boat-bar');
+    const text = document.getElementById('calage-boat-text');
+    const warning = document.getElementById('calage-boat-warning');
+    const researchInfo = document.getElementById('calage-research-info');
+    
+    if (!indicator) return;
+    
+    const units = getSelectedUnits();
+    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
+    
+    if (!needsBoats(units)) {
+        indicator.style.display = 'none';
+        return;
+    }
+    
+    indicator.style.display = 'block';
+    
+    const boatInfo = calculateRequiredBoats(units, sourceId);
+    const hasBoatResearch = hasResearch(sourceId, 'ship_transport');
+    
+    text.textContent = `${boatInfo.totalCapacity} / ${boatInfo.totalPop} pop`;
+    bar.style.width = boatInfo.percentage + '%';
+    
+    if (boatInfo.percentage >= 100) {
+        bar.style.background = 'linear-gradient(90deg, #4CAF50, #8BC34A)';
+        warning.style.display = 'none';
+    } else if (boatInfo.percentage >= 50) {
+        bar.style.background = 'linear-gradient(90deg, #FF9800, #FFC107)';
+        warning.style.display = 'block';
+        warning.textContent = `Manque ${boatInfo.neededCapacity} places!`;
+    } else {
+        bar.style.background = 'linear-gradient(90deg, #F44336, #E53935)';
+        warning.style.display = 'block';
+        warning.textContent = `Ajoutez des bateaux! (${boatInfo.neededCapacity} places manquantes)`;
+    }
+    
+    researchInfo.textContent = hasBoatResearch 
+        ? `Extension navale: GTrans=${boatInfo.bigBoatCap} pop, PTrans=${boatInfo.smallBoatCap} pop`
+        : `Sans extension: GTrans=${boatInfo.bigBoatCap} pop, PTrans=${boatInfo.smallBoatCap} pop`;
+}
+
+function getSelectedUnits() {
+    const units = {};
+    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
+        const unitId = inp.getAttribute('data-unit');
+        const count = parseInt(inp.value) || 0;
+        if (count > 0) {
+            units[unitId] = count;
+        }
+    });
+    return units;
+}
+
+function ajouterAttaque() {
+    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
+    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
+    const heureArrivee = document.getElementById('calage-heure-arrivee').value;
+    const typeAttaque = document.getElementById('calage-type-attaque').value;
+    const toleranceMoins = document.getElementById('calage-tolerance-moins').checked;
+    const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
+
+    if (!cibleId || !heureArrivee) {
+        log('CALAGE', 'Remplir cible et heure!', 'error');
+        return;
+    }
+
+    const unites = getSelectedUnits();
+    let totalUnites = Object.values(unites).reduce((a, b) => a + b, 0);
+
+    if (totalUnites === 0) {
+        log('CALAGE', 'Selectionner au moins une unite!', 'error');
+        return;
+    }
+
+    if (needsBoats(unites) && !hasBoatsSelected(unites)) {
+        log('CALAGE', 'Ajoutez des bateaux pour transporter vos troupes!', 'error');
+        return;
+    }
+    
+    if (needsBoats(unites)) {
+        const boatInfo = calculateRequiredBoats(unites, sourceId);
+        if (!boatInfo.hasEnoughBoats) {
+            log('CALAGE', `Capacite insuffisante! (${boatInfo.totalCapacity}/${boatInfo.totalPop})`, 'error');
+            return;
+        }
+    }
+
+    const nouvelleAttaque = {
+        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        sourceId: sourceId,
+        cibleId: cibleId,
+        heureArrivee: heureArrivee,
+        type: typeAttaque,
+        unites: unites,
+        toleranceMoins: toleranceMoins,
+        tolerancePlus: tolerancePlus,
+        status: 'attente',
+        tentatives: 0,
+        dateCreation: Date.now()
+    };
+
+    calageData.attaques.push(nouvelleAttaque);
+    saveData();
+    majListeAttaques();
+
+    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
+        inp.value = 0;
+    });
+    updateBoatIndicator();
+
+    log('CALAGE', 'Attaque ajoutee: ' + sourceId + ' -> ' + cibleId + ' @ ' + heureArrivee, 'success');
+}
+
+function planifierAttaques() {
+    const count = parseInt(document.getElementById('calage-plan-count').value) || 1;
+    const interval = parseInt(document.getElementById('calage-plan-interval').value) || 1;
+    
+    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
+    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
+    const heureArrivee = document.getElementById('calage-heure-arrivee').value;
+    const typeAttaque = document.getElementById('calage-type-attaque').value;
+    const toleranceMoins = document.getElementById('calage-tolerance-moins').checked;
+    const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
+    
+    if (!cibleId || !heureArrivee) {
+        log('CALAGE', 'Remplir cible et heure!', 'error');
+        return;
+    }
+    
+    const unites = getSelectedUnits();
+    let totalUnites = Object.values(unites).reduce((a, b) => a + b, 0);
+    
+    if (totalUnites === 0) {
+        log('CALAGE', 'Selectionner au moins une unite!', 'error');
+        return;
+    }
+    
+    if (needsBoats(unites) && !hasBoatsSelected(unites)) {
+        log('CALAGE', 'Ajoutez des bateaux!', 'error');
+        return;
+    }
+    
+    if (needsBoats(unites)) {
+        const boatInfo = calculateRequiredBoats(unites, sourceId);
+        if (!boatInfo.hasEnoughBoats) {
+            log('CALAGE', `Capacite insuffisante!`, 'error');
+            return;
+        }
+    }
+    
+    const [hours, minutes, seconds] = heureArrivee.split(':').map(Number);
+    let baseTime = new Date();
+    baseTime.setHours(hours, minutes, seconds || 0, 0);
+    
+    for (let i = 0; i < count; i++) {
+        const attackTime = new Date(baseTime.getTime() + (i * interval * 1000));
+        const timeStr = attackTime.toTimeString().split(' ')[0];
+        
+        const nouvelleAttaque = {
+            id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i,
+            sourceId: sourceId,
+            cibleId: cibleId,
+            heureArrivee: timeStr,
+            type: typeAttaque,
+            unites: { ...unites },
+            toleranceMoins: toleranceMoins,
+            tolerancePlus: tolerancePlus,
+            status: 'attente',
+            tentatives: 0,
+            dateCreation: Date.now()
+        };
+        
+        calageData.attaques.push(nouvelleAttaque);
+    }
+    
+    saveData();
+    majListeAttaques();
+    
+    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
+        inp.value = 0;
+    });
+    updateBoatIndicator();
+    
+    log('CALAGE', `${count} attaques planifiees (intervalle ${interval}s)`, 'success');
+}
+
+function savePlan() {
+    const nameInput = document.getElementById('calage-plan-name');
+    const planName = nameInput.value.trim();
+    
+    if (!planName) {
+        log('CALAGE', 'Entrez un nom de plan', 'warning');
+        return;
+    }
+    
+    const plan = {
+        name: planName,
+        date: new Date().toISOString(),
+        attaques: calageData.attaques.map(a => ({ ...a, status: 'attente', tentatives: 0 }))
+    };
+    
+    const existingIndex = calageData.plans.findIndex(p => p.name === planName);
+    if (existingIndex >= 0) {
+        calageData.plans[existingIndex] = plan;
+        log('CALAGE', `Plan "${planName}" mis a jour`, 'success');
+    } else {
+        calageData.plans.push(plan);
+        log('CALAGE', `Plan "${planName}" sauvegarde`, 'success');
+    }
+    
+    nameInput.value = '';
+    saveData();
+    updatePlansList();
+}
+
+function loadPlan(index) {
+    const plan = calageData.plans[index];
+    if (!plan) return;
+    
+    calageData.attaques = plan.attaques.map(a => ({ 
+        ...a, 
+        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        status: 'attente', 
+        tentatives: 0 
+    }));
+    
+    saveData();
+    majListeAttaques();
+    log('CALAGE', `Plan "${plan.name}" charge (${plan.attaques.length} attaques)`, 'success');
+}
+
+function deletePlan(index) {
+    const plan = calageData.plans[index];
+    if (!plan) return;
+    
+    calageData.plans.splice(index, 1);
+    saveData();
+    updatePlansList();
+    log('CALAGE', `Plan "${plan.name}" supprime`, 'info');
+}
+
+function updatePlansList() {
+    const container = document.getElementById('calage-plans-list');
+    if (!container) return;
+    
+    if (!calageData.plans.length) {
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:15px;">Aucun plan sauvegarde</div>';
+        return;
+    }
+    
+    container.innerHTML = calageData.plans.map((plan, i) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);padding:8px 12px;margin-bottom:6px;border-radius:4px;">
+            <div>
+                <div style="font-size:12px;color:#F5DEB3;font-weight:bold;">${plan.name}</div>
+                <div style="font-size:10px;color:#8B8B83;">${plan.attaques.length} attaques</div>
+            </div>
+            <div style="display:flex;gap:4px;">
+                <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">Charger</button>
+                <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:10px;">X</button>
+            </div>
+        </div>
+    `).join('');
+    
+    container.querySelectorAll('.plan-load-btn').forEach(b => {
+        b.onclick = () => loadPlan(parseInt(b.dataset.index));
+    });
+    container.querySelectorAll('.plan-delete-btn').forEach(b => {
+        b.onclick = () => deletePlan(parseInt(b.dataset.index));
+    });
+}
+
+function exportPlans() {
+    const exportData = {
+        version: '2.1.0',
+        exportDate: new Date().toISOString(),
+        plans: calageData.plans,
+        attaques: calageData.attaques
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'grepolis-calage-plans-' + new Date().toISOString().split('T')[0] + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    log('CALAGE', 'Plans exportes', 'success');
+}
+
+function importPlans(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const importData = JSON.parse(e.target.result);
+            
+            if (importData.plans && Array.isArray(importData.plans)) {
+                let imported = 0;
+                importData.plans.forEach(plan => {
+                    if (plan.name) {
+                        const existingIndex = calageData.plans.findIndex(p => p.name === plan.name);
+                        if (existingIndex >= 0) {
+                            calageData.plans[existingIndex] = plan;
+                        } else {
+                            calageData.plans.push(plan);
+                        }
+                        imported++;
+                    }
+                });
+                
+                log('CALAGE', `${imported} plan(s) importe(s)`, 'success');
+            }
+            
+            if (importData.attaques && Array.isArray(importData.attaques)) {
+                importData.attaques.forEach(atk => {
+                    atk.status = 'attente';
+                    atk.tentatives = 0;
+                    atk.id = 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                    calageData.attaques.push(atk);
+                });
+                log('CALAGE', `${importData.attaques.length} attaque(s) importee(s)`, 'success');
+            }
+            
+            saveData();
+            updatePlansList();
+            majListeAttaques();
+        } catch(err) {
+            log('CALAGE', 'Erreur import: ' + err.message, 'error');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
 }
 
 function majListeAttaques() {
@@ -416,7 +940,7 @@ function majListeAttaques() {
         div.className = 'attaque-item ' + itemClass;
         div.innerHTML = `
             <div class="attaque-info">
-                <div class="nom">${atk.sourceId} → ${atk.cibleId}</div>
+                <div class="nom">${atk.sourceId} -> ${atk.cibleId}</div>
                 <div class="details">${atk.heureArrivee} | ${atk.type} | ${unitsList.slice(0, 3).join(', ')}${unitsList.length > 3 ? '...' : ''}</div>
             </div>
             <span class="attaque-status ${statusClass}">${statusText}</span>
@@ -443,62 +967,6 @@ function majListeAttaques() {
     });
 }
 
-function ajouterAttaque() {
-    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
-    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
-    const heureArrivee = document.getElementById('calage-heure-arrivee').value;
-    const typeAttaque = document.getElementById('calage-type-attaque').value;
-    const toleranceMoins = document.getElementById('calage-tolerance-moins').checked;
-    const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
-
-    if (!cibleId || !heureArrivee) {
-        log('CALAGE', 'Remplir cible et heure!', 'error');
-        return;
-    }
-
-    const unites = {};
-    const inputs = document.querySelectorAll('#calage-units-grid input');
-    let totalUnites = 0;
-
-    inputs.forEach(function(input) {
-        const unitId = input.getAttribute('data-unit');
-        const count = parseInt(input.value) || 0;
-        if (count > 0) {
-            unites[unitId] = count;
-            totalUnites += count;
-        }
-    });
-
-    if (totalUnites === 0) {
-        log('CALAGE', 'Selectionner au moins une unite!', 'error');
-        return;
-    }
-
-    const nouvelleAttaque = {
-        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-        sourceId: sourceId,
-        cibleId: cibleId,
-        heureArrivee: heureArrivee,
-        type: typeAttaque,
-        unites: unites,
-        toleranceMoins: toleranceMoins,
-        tolerancePlus: tolerancePlus,
-        status: 'attente',
-        tentatives: 0,
-        dateCreation: Date.now()
-    };
-
-    calageData.attaques.push(nouvelleAttaque);
-    saveData();
-    majListeAttaques();
-
-    inputs.forEach(function(input) {
-        input.value = 0;
-    });
-
-    log('CALAGE', 'Attaque ajoutee: ' + sourceId + ' → ' + cibleId + ' @ ' + heureArrivee, 'success');
-}
-
 function supprimerAttaque(index) {
     calageData.attaques.splice(index, 1);
     saveData();
@@ -523,7 +991,7 @@ function lancerAttaqueMaintenant(index) {
         return;
     }
 
-    log('CALAGE', 'Lancement manuel: ' + atk.sourceId + ' → ' + atk.cibleId, 'info');
+    log('CALAGE', 'Lancement manuel: ' + atk.sourceId + ' -> ' + atk.cibleId, 'info');
     lancerAttaque(atk);
 }
 
@@ -588,7 +1056,7 @@ function lancerAttaque(atk) {
     majStatus('Envoi vers ' + atk.cibleId + '...');
 
     if (uw.Game.townId !== atk.sourceId) {
-        log('CALAGE', 'Changement ville: ' + uw.Game.townId + ' → ' + atk.sourceId, 'info');
+        log('CALAGE', 'Changement ville: ' + uw.Game.townId + ' -> ' + atk.sourceId, 'info');
         majStatus('Changement ville...');
 
         try {
@@ -716,7 +1184,7 @@ function traiterReponseAttaque(response, atk) {
             calageData.attaqueEnCours = null;
 
             sendWebhook('Calage Reussi!', 
-                `**${atk.sourceId} → ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
+                `**${atk.sourceId} -> ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
             return;
         }
 
@@ -851,6 +1319,7 @@ function saveData() {
     GM_setValue(STORAGE_KEY, JSON.stringify({
         attaques: calageData.attaques,
         botActif: calageData.botActif,
+        plans: calageData.plans,
         settings: calageData.settings
     }));
 }
@@ -862,6 +1331,7 @@ function loadData() {
             const d = JSON.parse(saved);
             calageData.attaques = d.attaques || [];
             calageData.botActif = d.botActif || false;
+            calageData.plans = d.plans || [];
             calageData.settings = d.settings || { webhook: '' };
         } catch(e) {}
     }
