@@ -1,6 +1,6 @@
 {
     "version": "1.0",
-    "lastUpdate": "2025-01-28",
+    "lastUpdate": "2025-01-29",
     "players": [
         {
             "name": "Anphidet",
@@ -13,9 +13,8 @@
             "name": "Mipose62",
             "playerId": 0,
             "servers": ["179"],
-            "modules": ["farm", "build", "terrestre", "calage", "parametre"],
+            "modules": ["farm", "build", "recruit", "calage", "settings"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
-
