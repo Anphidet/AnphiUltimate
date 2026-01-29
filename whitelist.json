@@ -3,7 +3,7 @@
     "lastUpdate": "2025-01-29",
     "moduleStatus": {
         "dodge": "dev",
-        "naval": "dev"
+        "naval": "maj"
     },
     "players": [
         {
@@ -18,10 +18,18 @@
             "name": "Mipose62",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["*"],
+            "modules": ["build"],
             "isAdmin": False,
             "comment": "Admin - Acces complet"
+        },
+        {
+            "name": "Grinta",
+            "playerId": 0,
+            "servers": ["179"],
+            "modules": ["farm", "build", "terrestre", "calage", "parametre"]
+            "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
