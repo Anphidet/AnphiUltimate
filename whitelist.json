@@ -8,6 +8,14 @@
             "servers": ["*"],
             "modules": ["*"],
             "comment": "Admin - Acces complet"
+        },
+        {
+            "name": "Mipose62",
+            "playerId": 0,
+            "servers": ["179"],
+            "modules": ["farm", "build", "terrestre", "calage", "parametre"],
+            "comment": "Dodoagrrr 179"
         }
     ]
 }
+
