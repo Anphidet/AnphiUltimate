@@ -19,17 +19,17 @@
             "playerId": 0,
             "servers": ["*"],
             "modules": ["build"],
-            "isAdmin": False,
             "comment": "Admin - Acces complet"
         },
         {
             "name": "Grinta",
             "playerId": 0,
             "servers": ["179"],
-            "modules": ["farm", "build", "terrestre", "calage", "parametre"]
+            "modules": ["farm", "build", "terrestre", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
 
