@@ -12,9 +12,10 @@
         {
             "name": "Mipose62",
             "playerId": 0,
-            "servers": ["179"],
+            "servers": ["fr179"],
             "modules": ["farm", "build", "recruit", "calage", "settings"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
