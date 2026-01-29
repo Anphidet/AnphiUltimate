@@ -10,6 +10,7 @@
         { id: 'farm', name: 'Farm', icon: '🌾', script: 'tabs/farm.js' },
         { id: 'build', name: 'Build', icon: '🏗️', script: 'tabs/build.js' },
         { id: 'recruit', name: 'Recruit', icon: '⚔️', script: 'tabs/recruit.js' },
+        { id: 'naval', name: 'Naval', icon: '⚓', script: 'tabs/naval.js' },
         { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js' },
         { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
         { id: 'settings', name: 'Parametres', icon: '⚙️', script: 'tabs/settings.js' }
