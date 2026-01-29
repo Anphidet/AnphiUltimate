@@ -1,4 +1,4 @@
-{
+z{
     "version": "1.0",
     "lastUpdate": "2025-01-29",
     "players": [
@@ -19,18 +19,19 @@
         {
             "name": "Grinta",
             "playerId": 0,
-            "servers": ["179"],
+            "servers": ["fr179"],
             "modules": ["farm", "build", "terrestre", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "TCHAPALO",
             "playerId": 0,
-            "servers": ["179"],
+            "servers": ["fr179"],
             "modules": ["farm", "build", "terrestre", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
 
