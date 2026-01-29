@@ -13,6 +13,15 @@
             "modules": ["*"],
             "isAdmin": true,
             "comment": "Admin - Acces complet"
+        },
+        {
+            "name": "Mipose62",
+            "playerId": 0,
+            "servers": ["*"],
+            "modules": ["*"],
+            "isAdmin": False,
+            "comment": "Admin - Acces complet"
         }
     ]
 }
+
