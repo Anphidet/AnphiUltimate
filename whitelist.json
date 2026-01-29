@@ -6,25 +6,26 @@
             "name": "MiPose62",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["*"],
+            "modules": ["farm", "naval"],
             "comment": "Admin - Acces complet"
         },
         {
             "name": "Grinta",
             "playerId": 0,
-            "servers": ["*"],
+            "servers": ["179"],
             "modules": ["*"],
             "comment": "Admin - Acces complet"
         },
         {
             "name": "TCHAPALO",
             "playerId": 0,
-            "servers": ["*"],
+            "servers": ["179"],
             "modules": ["*"],
             "comment": "Admin - Acces complet"
         }
     ]
 }
+
 
 
 
