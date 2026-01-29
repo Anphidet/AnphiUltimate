@@ -18,7 +18,7 @@
             "name": "Mipose62",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["build"],
+            "modules": ["build", "naval", "calage"],
             "comment": "Admin - Acces complet"
         },
         {
@@ -30,6 +30,7 @@
         }
     ]
 }
+
 
 
 
