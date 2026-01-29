@@ -12,10 +12,25 @@
         {
             "name": "Mipose62",
             "playerId": 0,
-            "servers": ["fr179"],
-            "modules": ["farm", "build", "recruit", "calage", "settings"],
+            "servers": ["*"],
+            "modules": ["*"],
+            "comment": "Dodoagrrr 179"
+        },
+        {
+            "name": "Grinta",
+            "playerId": 0,
+            "servers": ["179"],
+            "modules": ["farm", "build", "terrestre", "calage", "parametre"],
+            "comment": "Dodoagrrr 179"
+        },
+        {
+            "name": "TCHAPALO",
+            "playerId": 0,
+            "servers": ["179"],
+            "modules": ["farm", "build", "terrestre", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
