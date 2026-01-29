@@ -1,31 +1,18 @@
 {
-    "version": "1.0",
-    "lastUpdate": "2025-01-28",
+    "version": "1.1",
+    "lastUpdate": "2025-01-29",
+    "moduleStatus": {
+        "dodge": "dev",
+        "naval": "dev"
+    },
     "players": [
         {
-            "name": "MiPose62",
+            "name": "Anphidet",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["farm", "naval"],
-            "comment": "Admin - Acces complet"
-        },
-        {
-            "name": "Grinta",
-            "playerId": 0,
-            "servers": ["179"],
             "modules": ["*"],
-            "comment": "Admin - Acces complet"
-        },
-        {
-            "name": "TCHAPALO",
-            "playerId": 0,
-            "servers": ["179"],
-            "modules": ["*"],
+            "isAdmin": true,
             "comment": "Admin - Acces complet"
         }
     ]
 }
-
-
-
-
