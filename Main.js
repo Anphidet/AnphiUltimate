@@ -49,6 +49,11 @@
         .ultimate-tab.disabled{color:#555;cursor:not-allowed;opacity:0.6}
         .ultimate-tab.locked{color:#E57373;cursor:not-allowed;opacity:0.7}
         .ultimate-tab.locked::after{content:'🔒';font-size:8px;margin-left:3px}
+        .ultimate-tab.dev{color:#9E9E9E;cursor:not-allowed;opacity:0.7}
+        .ultimate-tab.dev .tab-icon::before{content:'⚙️';font-size:8px;position:absolute;left:2px;top:2px}
+        .ultimate-tab.update{color:#FF9800;cursor:not-allowed;opacity:0.8}
+        .ultimate-tab.update .tab-icon::before{content:'🚧';font-size:8px;position:absolute;left:2px;top:2px}
+        .ultimate-tab .tab-icon{position:relative}
         .ultimate-tab .tab-icon{display:block;font-size:16px;margin-bottom:3px}
         .ultimate-main{display:flex;flex:1;overflow:hidden}
         .ultimate-body{padding:15px;flex:1;overflow-y:auto}
@@ -140,6 +145,14 @@
         .locked-module-icon{font-size:60px;margin-bottom:15px;opacity:0.6}
         .locked-module-title{font-family:'Cinzel',serif;font-size:22px;color:#E57373;margin-bottom:10px}
         .locked-module-text{font-size:14px;color:#8B8B83}
+        .dev-module-container{text-align:center;padding:60px 20px}
+        .dev-module-icon{font-size:60px;margin-bottom:15px;opacity:0.6}
+        .dev-module-title{font-family:'Cinzel',serif;font-size:22px;color:#9E9E9E;margin-bottom:10px}
+        .dev-module-text{font-size:14px;color:#8B8B83;line-height:1.6}
+        .update-module-container{text-align:center;padding:60px 20px}
+        .update-module-icon{font-size:60px;margin-bottom:15px;opacity:0.8}
+        .update-module-title{font-family:'Cinzel',serif;font-size:22px;color:#FF9800;margin-bottom:10px}
+        .update-module-text{font-size:14px;color:#8B8B83;line-height:1.6}
     `);
 
     function log(module, msg, type = 'info') {
@@ -201,7 +214,8 @@
                                 allowed: true,
                                 modules: access.modules || ['*'],
                                 name: access.name,
-                                servers: access.servers || ['*']
+                                servers: access.servers || ['*'],
+                                isAdmin: access.isAdmin === true
                             };
                             console.log('[GU] Acces autorise:', userAccess);
                             callback(true);
@@ -233,6 +247,25 @@
         if (!userAccess || !userAccess.allowed) return false;
         if (userAccess.modules.includes('*')) return true;
         return userAccess.modules.includes(moduleId);
+    }
+
+    function isAdmin() {
+        if (!userAccess || !userAccess.allowed) return false;
+        return userAccess.isAdmin === true;
+    }
+
+    function getModuleStatus(moduleId) {
+        if (!whitelistData || !whitelistData.moduleStatus) return null;
+        return whitelistData.moduleStatus[moduleId] || null;
+    }
+
+    function canAccessModule(moduleId) {
+        const status = getModuleStatus(moduleId);
+        if (!status) return isModuleAllowed(moduleId);
+        if (status === 'dev' || status === 'update') {
+            return isAdmin();
+        }
+        return isModuleAllowed(moduleId);
     }
 
     function showAccessDenied() {
@@ -282,10 +315,27 @@
             let classes = 'ultimate-tab';
             if (tab.id === 'farm') classes += ' active';
             if (tab.disabled) classes += ' disabled';
-            else if (!isModuleAllowed(tab.id) && tab.id !== 'settings') classes += ' locked';
+            else {
+                const status = getModuleStatus(tab.id);
+                if (status === 'dev' && !isAdmin()) {
+                    classes += ' dev';
+                } else if (status === 'update' && !isAdmin()) {
+                    classes += ' update';
+                } else if (!isModuleAllowed(tab.id) && tab.id !== 'settings') {
+                    classes += ' locked';
+                }
+            }
+            
+            let iconHtml = `<span class="tab-icon">${tab.icon}</span>`;
+            const status = getModuleStatus(tab.id);
+            if (status === 'dev' && !isAdmin()) {
+                iconHtml = `<span class="tab-icon">⚙️</span>`;
+            } else if (status === 'update' && !isAdmin()) {
+                iconHtml = `<span class="tab-icon">🚧</span>`;
+            }
             
             return `<button class="${classes}" data-tab="${tab.id}">
-                <span class="tab-icon">${tab.icon}</span>${tab.name}
+                ${iconHtml}${tab.name}
             </button>`;
         }).join('');
 
@@ -320,6 +370,54 @@
                 const tabId = tab.dataset.tab;
                 const tabConfig = TABS_CONFIG.find(t => t.id === tabId);
                 
+                if (tab.classList.contains('dev')) {
+                    document.querySelectorAll('.ultimate-tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    tab.classList.add('active');
+                    const content = document.getElementById(`tab-${tabId}`);
+                    content.classList.add('active');
+                    content.innerHTML = `
+                        <div class="dev-module-container">
+                            <div class="dev-module-icon">⚙️</div>
+                            <div class="dev-module-title">Module en Developpement</div>
+                            <div class="dev-module-text">
+                                Ce module est actuellement en cours de developpement.<br>
+                                Il sera disponible dans une prochaine mise a jour.<br><br>
+                                Restez connecte sur Discord pour suivre les nouveautes!
+                            </div>
+                            <a href="${DISCORD_INVITE}" target="_blank" class="btn btn-discord" style="margin-top:20px;display:inline-block;text-decoration:none;">
+                                Rejoindre le Discord
+                            </a>
+                        </div>
+                    `;
+                    currentTab = tabId;
+                    return;
+                }
+                
+                if (tab.classList.contains('update')) {
+                    document.querySelectorAll('.ultimate-tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    tab.classList.add('active');
+                    const content = document.getElementById(`tab-${tabId}`);
+                    content.classList.add('active');
+                    content.innerHTML = `
+                        <div class="update-module-container">
+                            <div class="update-module-icon">🚧</div>
+                            <div class="update-module-title">Module en Mise a Jour</div>
+                            <div class="update-module-text">
+                                Ce module est temporairement indisponible.<br>
+                                Une mise a jour est en cours pour ameliorer ses fonctionnalites.<br><br>
+                                Il sera de nouveau accessible tres bientot!
+                            </div>
+                            <a href="${DISCORD_INVITE}" target="_blank" class="btn btn-discord" style="margin-top:20px;display:inline-block;text-decoration:none;">
+                                Rejoindre le Discord
+                            </a>
+                        </div>
+                    `;
+                    currentTab = tabId;
+                    return;
+                }
+                
                 if (tab.classList.contains('locked')) {
                     document.querySelectorAll('.ultimate-tab').forEach(t => t.classList.remove('active'));
                     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -352,7 +450,7 @@
             };
         });
 
-        const firstAllowedTab = TABS_CONFIG.find(t => !t.disabled && isModuleAllowed(t.id));
+        const firstAllowedTab = TABS_CONFIG.find(t => !t.disabled && canAccessModule(t.id));
         if (firstAllowedTab) {
             loadTab(firstAllowedTab);
         }
@@ -368,7 +466,7 @@
 
     function loadTab(tab) {
         if (!tab || tab.disabled) return;
-        if (!isModuleAllowed(tab.id) && tab.id !== 'settings') return;
+        if (!canAccessModule(tab.id) && tab.id !== 'settings') return;
         
         const content = document.getElementById(`tab-${tab.id}`);
         if (!content) return;
