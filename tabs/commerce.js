@@ -1095,6 +1095,37 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
     
     log('COMMERCE', 'Capacite OK (' + totalDemande + ' <= ' + availableCapacity + ')', 'success');
     
+    if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
+        log('COMMERCE', 'Utilisation gpAjax.ajaxPost...', 'info');
+        
+        const data = {
+            from: sourceId,
+            to: destId,
+            wood: wood,
+            iron: iron,
+            stone: stone,
+            town_id: sourceId,
+            nl_init: true
+        };
+        
+        log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
+        
+        uw.gpAjax.ajaxPost('town_overviews', 'trade_between_own_towns', data, true, function(response) {
+            log('COMMERCE', 'Reponse gpAjax: ' + JSON.stringify(response).substring(0, 200), 'info');
+            if (response?.error) {
+                log('COMMERCE', 'ECHEC - ' + response.error, 'error');
+                callback(false);
+                return;
+            }
+            log('COMMERCE', 'SUCCES - Envoye: ' + wood + ' bois, ' + stone + ' pierre, ' + iron + ' argent', 'success');
+            log('COMMERCE', sourceName + ' -> ' + destName, 'success');
+            callback(true);
+        });
+        return;
+    }
+    
+    log('COMMERCE', 'gpAjax non disponible, utilisation $.ajax...', 'warning');
+    
     const csrfToken = uw.Game.csrfToken;
     const data = {
         from: sourceId,
