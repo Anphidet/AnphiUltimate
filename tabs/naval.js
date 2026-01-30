@@ -134,33 +134,70 @@ function getAllNavalUnits() {
 function getUnitsInQueue() {
     const queued = {};
     try {
+        const townId = getCurrentCityId();
         const ct = uw.ITowns.getCurrentTown();
-        if (ct && ct.getDocksOrders) {
+        
+        if (ct && typeof ct.docksOrders === 'function') {
+            const orders = ct.docksOrders();
+            if (orders && orders.models) {
+                orders.models.forEach(order => {
+                    const attrs = order.attributes || order;
+                    const unitId = attrs.unit_id;
+                    const count = attrs.units_left || attrs.count || 1;
+                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                });
+            } else if (orders && orders.length) {
+                orders.forEach(order => {
+                    const attrs = order.attributes || order;
+                    const unitId = attrs.unit_id || (order.getUnitId && order.getUnitId());
+                    const count = attrs.units_left || attrs.count || (order.getUnitsLeft && order.getUnitsLeft()) || 1;
+                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                });
+            }
+        }
+        
+        if (Object.keys(queued).length === 0 && ct && typeof ct.getDocksOrders === 'function') {
             const orders = ct.getDocksOrders();
             if (orders && orders.length) {
                 orders.forEach(order => {
-                    const unitId = order.getUnitId ? order.getUnitId() : order.unit_id;
-                    const count = order.getCount ? order.getCount() : order.count || 1;
-                    queued[unitId] = (queued[unitId] || 0) + count;
+                    const attrs = order.attributes || order;
+                    const unitId = attrs.unit_id || (order.getUnitId && order.getUnitId());
+                    const count = attrs.units_left || attrs.count || 1;
+                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
                 });
             }
         }
         
         if (Object.keys(queued).length === 0 && uw.MM && uw.MM.getModels) {
             const models = uw.MM.getModels();
-            const townId = getCurrentCityId();
-            if (models.DocksOrder) {
+            
+            if (models.UnitOrder) {
+                for (let id in models.UnitOrder) {
+                    const order = models.UnitOrder[id];
+                    const attrs = order.attributes || order;
+                    if (attrs.town_id == townId && attrs.kind === 'docks') {
+                        const unitId = attrs.unit_id;
+                        const count = attrs.units_left || attrs.count || 1;
+                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                    }
+                }
+            }
+            
+            if (Object.keys(queued).length === 0 && models.DocksOrder) {
                 for (let id in models.DocksOrder) {
                     const order = models.DocksOrder[id];
-                    if (order.attributes && order.attributes.town_id == townId) {
-                        const unitId = order.attributes.unit_id;
-                        const count = order.attributes.count || 1;
-                        queued[unitId] = (queued[unitId] || 0) + count;
+                    const attrs = order.attributes || order;
+                    if (attrs.town_id == townId) {
+                        const unitId = attrs.unit_id;
+                        const count = attrs.units_left || attrs.count || 1;
+                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
                     }
                 }
             }
         }
-    } catch(e) {}
+    } catch(e) {
+        log('NAVAL', 'Erreur getUnitsInQueue: ' + e.message, 'warning');
+    }
     return queued;
 }
 
