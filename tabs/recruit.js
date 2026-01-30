@@ -34,6 +34,105 @@ function getResearches() { try { const ct = uw.ITowns.getCurrentTown(); return c
 function hasResearch(id) { if (!id) return true; const r = getResearches(); return r[id] === true || r[id] === 1; }
 function getUnitsInTown() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.units ? ct.units() : {}; } catch(e) { return {}; } }
 
+function getUnitsInQueue() {
+    const queued = {};
+    try {
+        const townId = getCurrentCityId();
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            
+            if (models.UnitOrder) {
+                for (let id in models.UnitOrder) {
+                    const order = models.UnitOrder[id];
+                    const attrs = order.attributes || order;
+                    if (attrs.town_id == townId && attrs.kind === 'barracks') {
+                        const unitId = attrs.unit_type;
+                        const count = attrs.units_left || attrs.count || 1;
+                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                    }
+                }
+            }
+        }
+    } catch(e) {
+        log('RECRUIT', 'Erreur getUnitsInQueue: ' + e.message, 'warning');
+    }
+    return queued;
+}
+
+function getGlobalUnits() {
+    const globalUnits = {};
+    try {
+        const townId = getCurrentCityId();
+        const ct = uw.ITowns.getCurrentTown();
+        
+        const inTown = getUnitsInTown();
+        for (let unitId in inTown) {
+            if (inTown[unitId] > 0) {
+                globalUnits[unitId] = (globalUnits[unitId] || 0) + inTown[unitId];
+            }
+        }
+        
+        if (ct && typeof ct.unitsOuter === 'function') {
+            const outer = ct.unitsOuter();
+            if (outer) {
+                for (let unitId in outer) {
+                    if (outer[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outer[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (ct && typeof ct.unitsOuterTown === 'function') {
+            const outerTown = ct.unitsOuterTown();
+            if (outerTown) {
+                for (let unitId in outerTown) {
+                    if (outerTown[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outerTown[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (ct && typeof ct.unitsSupport === 'function') {
+            const support = ct.unitsSupport();
+            if (support) {
+                for (let unitId in support) {
+                    if (support[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + support[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            
+            if (models.Movements || models.Commands) {
+                const mvModel = models.Movements || models.Commands;
+                for (let id in mvModel) {
+                    const mv = mvModel[id];
+                    const attrs = mv.attributes || mv;
+                    if ((attrs.origin_town_id == townId || attrs.home_town_id == townId) && attrs.units) {
+                        const units = attrs.units;
+                        for (let unitId in units) {
+                            const unitData = uw.GameData.units[unitId];
+                            if (units[unitId] > 0 && unitData && !unitData.is_naval) {
+                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+    } catch(e) {
+        log('RECRUIT', 'Erreur getGlobalUnits: ' + e.message, 'warning');
+    }
+    return globalUnits;
+}
+
 function isUnitAvailable(unitId) {
     try {
         const unitData = uw.GameData.units[unitId];
@@ -161,8 +260,10 @@ module.render = function(container) {
             <div class="section-content">
                 <div class="options-grid">
                     <div class="option-group">
-                        <span class="option-label">Intervalle (min)</span>
+                        <span class="option-label">Intervalle</span>
                         <select class="option-select" id="recruit-interval">
+                            <option value="0.16">10 sec</option>
+                            <option value="0.5">30 sec</option>
                             <option value="1">1 min</option>
                             <option value="2">2 min</option>
                             <option value="5">5 min</option>
@@ -216,10 +317,12 @@ module.init = function() {
     
     document.getElementById('toggle-recruit').onchange = (e) => toggleRecruit(e.target.checked);
     document.getElementById('recruit-interval').onchange = (e) => {
-        recruitData.settings.checkInterval = parseInt(e.target.value);
+        recruitData.settings.checkInterval = parseFloat(e.target.value);
         recruitData.nextCheckTime = Date.now() + recruitData.settings.checkInterval * 60000;
         saveData();
-        log('RECRUIT', 'Intervalle: ' + e.target.value + ' min', 'info');
+        const val = parseFloat(e.target.value);
+        const label = val < 1 ? (val * 60) + ' sec' : val + ' min';
+        log('RECRUIT', 'Intervalle: ' + label, 'info');
     };
     document.getElementById('recruit-mode').onchange = (e) => {
         recruitData.settings.recruitMode = e.target.value;
@@ -299,18 +402,30 @@ function updateUnitsGrid() {
     if (!grid) return;
     
     const units = getAvailableUnits();
+    const unitsInTown = getUnitsInTown();
+    const globalUnits = getGlobalUnits();
+    const unitsInQueue = getUnitsInQueue();
+    
     if (!units.length) {
         grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucune unite disponible</div>';
         return;
     }
     
-    grid.innerHTML = units.map(u => `
+    grid.innerHTML = units.map(u => {
+        const inTown = unitsInTown[u.id] || 0;
+        const total = globalUnits[u.id] || 0;
+        const outside = total - inTown;
+        const queued = unitsInQueue[u.id] || 0;
+        return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
-            <div style="font-size:9px;color:#BDB76B;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <div style="font-size:10px;margin-bottom:4px;">
+                <span style="color:#4CAF50;">${inTown}</span>${outside > 0 ? ` + <span style="color:#FF9800;">${outside}</span>` : ''}${queued > 0 ? ` + <span style="color:#64B5F6;">${queued}</span>` : ''}
+            </div>
             <input type="number" class="recruit-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
-    `).join('');
+    `}).join('');
 }
 
 function updateTargetsGrid() {
@@ -321,6 +436,8 @@ function updateTargetsGrid() {
     const cityId = getCurrentCityId();
     const targets = recruitData.targets[cityId] || {};
     const unitsInTown = getUnitsInTown();
+    const unitsInQueue = getUnitsInQueue();
+    const globalUnits = getGlobalUnits();
     
     if (!units.length) {
         grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucune unite disponible</div>';
@@ -328,14 +445,22 @@ function updateTargetsGrid() {
     }
     
     grid.innerHTML = units.map(u => {
-        const current = unitsInTown[u.id] || 0;
+        const inTown = unitsInTown[u.id] || 0;
+        const queued = unitsInQueue[u.id] || 0;
+        const totalGlobal = globalUnits[u.id] || 0;
+        const outside = totalGlobal - inTown;
+        const grandTotal = totalGlobal + queued;
         const target = targets[u.id] || 0;
-        const color = current >= target ? '#4CAF50' : '#FF9800';
+        const isComplete = grandTotal >= target && target > 0;
+        const targetColor = target === 0 ? '#8B8B83' : (isComplete ? '#4CAF50' : '#FF9800');
         return `
-        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
+        <div style="background:rgba(0,0,0,0.3);border:1px solid ${isComplete ? 'rgba(76,175,80,0.5)' : 'rgba(212,175,55,0.3)'};border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:10px;color:${color};margin-bottom:4px;">${current} / <span class="target-display" data-unit="${u.id}">${target}</span></div>
+            <div style="font-size:9px;margin-bottom:2px;">
+                <span style="color:#4CAF50;">${inTown}</span>${outside > 0 ? ` + <span style="color:#FF9800;">${outside}</span>` : ''}${queued > 0 ? ` + <span style="color:#64B5F6;">${queued}</span>` : ''}
+            </div>
+            <div style="font-size:10px;color:${targetColor};margin-bottom:4px;">Total: ${grandTotal} / ${target}</div>
             <input type="number" class="recruit-target-input option-input" data-unit="${u.id}" value="${target}" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
