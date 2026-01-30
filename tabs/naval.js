@@ -911,10 +911,10 @@ function runTargetMode(townId) {
             continue;
         }
         
-        const toRecruit = Math.min(needed, maxAffordable, buildQueueSlots);
+        const toRecruit = Math.min(needed, maxAffordable);
         if (toRecruit <= 0) continue;
         
-        log('NAVAL', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit} (max: ${maxAffordable}, besoin: ${needed})`, 'info');
+        log('NAVAL', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit} (max ressources: ${maxAffordable}, besoin: ${needed})`, 'info');
         recruitShips(cityId, unitId, toRecruit, unitData.name, function() {
             updateTargetsGrid();
         });
