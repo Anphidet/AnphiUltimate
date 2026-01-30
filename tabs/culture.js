@@ -118,17 +118,31 @@ function getGoldForPlayer() {
 
 function getBattlePointsForPlayer() {
     try {
+        const playerLedger = uw.MM.getModels().PlayerLedger;
+        if (playerLedger) {
+            for (let id in playerLedger) {
+                const ledger = playerLedger[id];
+                if (ledger?.attributes?.battle_points !== undefined) {
+                    return ledger.attributes.battle_points;
+                }
+            }
+        }
+        
         const playerData = uw.MM.getModels().Player;
         if (playerData) {
             for (let id in playerData) {
                 const p = playerData[id];
-                return p?.attributes?.battle_points || p?.attributes?.bp || 0;
+                if (p?.attributes?.battle_points !== undefined) return p.attributes.battle_points;
+                if (p?.attributes?.bp !== undefined) return p.attributes.bp;
             }
         }
+        
         if (uw.Game && typeof uw.Game.battle_points !== 'undefined') {
             return uw.Game.battle_points;
         }
-    } catch(e) {}
+    } catch(e) {
+        console.log('[CULTURE] Erreur getBattlePoints:', e);
+    }
     return 0;
 }
 
@@ -220,14 +234,15 @@ function canCelebrate(townId, celebrationId) {
 
 function getCelebrationInProgress(townId) {
     try {
-        const celebrations = uw.MM.getModels().CelebrationParty || uw.MM.getModels().Celebration;
+        const celebrations = uw.MM.getModels().Celebration;
         if (celebrations) {
             for (let id in celebrations) {
                 const celeb = celebrations[id];
-                if (celeb?.attributes?.town_id === townId || celeb?.town_id === townId) {
+                const attrs = celeb?.attributes || celeb;
+                if (attrs?.town_id == townId) {
                     return {
-                        type: celeb.attributes?.celebration_type || celeb.celebration_type,
-                        finishTime: celeb.attributes?.finished_at || celeb.finished_at
+                        type: attrs.celebration_type || attrs.type,
+                        finishTime: attrs.finished_at
                     };
                 }
             }
@@ -239,12 +254,14 @@ function getCelebrationInProgress(townId) {
                 const c = town.getCelebration();
                 if (c) return { type: c.type || c.celebration_type, finishTime: c.finished_at };
             }
-            if (town.celebration && town.celebration()) {
+            if (typeof town.celebration === 'function') {
                 const c = town.celebration();
                 if (c) return { type: c.type || c.celebration_type, finishTime: c.finished_at };
             }
         }
-    } catch(e) {}
+    } catch(e) {
+        console.log('[CULTURE] Erreur getCelebrationInProgress:', e);
+    }
     return null;
 }
 
@@ -265,18 +282,22 @@ function startCelebration(townId, celebrationId, callback) {
     
     const csrfToken = uw.Game.csrfToken;
     
+    log('CULTURE', `[${getTownNameById(townId)}] Lancement ${celebration.name}...`, 'info');
+    
     uw.$.ajax({
         type: 'POST',
-        url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
+        url: `/game/building_place?town_id=${townId}&action=culture&h=${csrfToken}`,
         data: { 
             json: JSON.stringify({ 
-                celebration_type: celebrationId, 
+                celebration_type: celebrationId,
                 town_id: townId,
                 nl_init: true 
             }) 
         },
         dataType: 'json',
         success: function(response) {
+            console.log('[CULTURE] Response:', response);
+            
             if (response?.json?.error) {
                 log('CULTURE', `[${getTownNameById(townId)}] Erreur ${celebration.name}: ${response.json.error}`, 'error');
                 if (callback) callback(false);
@@ -290,11 +311,13 @@ function startCelebration(townId, celebrationId, callback) {
                 time: Date.now()
             };
             saveData();
+            updateStats();
             
             log('CULTURE', `[${getTownNameById(townId)}] ${celebration.icon} ${celebration.name} lance!`, 'success');
             if (callback) callback(true);
         },
         error: function(xhr, status, error) {
+            console.log('[CULTURE] Ajax Error:', xhr, status, error);
             log('CULTURE', `[${getTownNameById(townId)}] Erreur reseau: ${error}`, 'error');
             if (callback) callback(false);
         }
@@ -332,10 +355,17 @@ function isCelebrationAvailable(townId, celebrationId) {
 }
 
 function runCultureCycle() {
-    if (!cultureData.enabled) return;
+    if (!cultureData.enabled) {
+        log('CULTURE', 'Bot non actif, cycle ignore', 'info');
+        return;
+    }
+    
+    log('CULTURE', 'Verification des celebrations...', 'info');
     
     const towns = getAllTowns();
     let celebrationStarted = false;
+    let townsChecked = 0;
+    let townsWithCelebration = 0;
     
     for (let town of towns) {
         const townId = town.id;
@@ -343,8 +373,12 @@ function runCultureCycle() {
         
         const inProgress = getCelebrationInProgress(townId);
         if (inProgress) {
+            townsWithCelebration++;
+            log('CULTURE', `[${town.name}] Celebration en cours: ${CELEBRATIONS[inProgress.type]?.name || inProgress.type}`, 'info');
             continue;
         }
+        
+        townsChecked++;
         
         const celebrationOrder = ['party', 'games', 'triumph', 'theater'];
         
@@ -357,12 +391,18 @@ function runCultureCycle() {
                 startCelebration(townId, celebId, function(success) {
                     if (success) {
                         celebrationStarted = true;
+                        updateStatusList();
+                        updateTownsGrid();
                     }
                 });
                 break;
+            } else {
+                log('CULTURE', `[${town.name}] ${CELEBRATIONS[celebId].name}: ${checkResult.reason}`, 'warning');
             }
         }
     }
+    
+    log('CULTURE', `Verification terminee: ${townsChecked} villes verifiees, ${townsWithCelebration} en cours`, 'info');
     
     cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
     saveData();
@@ -698,20 +738,44 @@ module.render = function(container) {
 module.init = function() {
     loadData();
     
-    document.getElementById('toggle-culture').checked = cultureData.enabled;
-    document.getElementById('culture-interval').value = cultureData.checkInterval;
+    const toggleEl = document.getElementById('toggle-culture');
+    const intervalEl = document.getElementById('culture-interval');
+    const ctrlEl = document.getElementById('culture-control');
+    const statusEl = document.getElementById('culture-status');
     
-    document.getElementById('toggle-culture').onchange = (e) => toggleCulture(e.target.checked);
-    document.getElementById('culture-interval').onchange = (e) => {
-        cultureData.checkInterval = parseInt(e.target.value);
-        saveData();
-        log('CULTURE', 'Intervalle: ' + cultureData.checkInterval + 's', 'info');
-    };
-    document.getElementById('culture-check-now').onclick = () => {
-        log('CULTURE', 'Verification manuelle...', 'info');
-        runCultureCycle();
-        updateStatusList();
-    };
+    if (toggleEl) {
+        toggleEl.checked = cultureData.enabled;
+        if (cultureData.enabled) {
+            ctrlEl?.classList.remove('inactive');
+            if (statusEl) statusEl.textContent = 'Actif';
+        }
+    }
+    
+    if (intervalEl) {
+        intervalEl.value = cultureData.checkInterval;
+    }
+    
+    if (toggleEl) {
+        toggleEl.onchange = (e) => toggleCulture(e.target.checked);
+    }
+    
+    if (intervalEl) {
+        intervalEl.onchange = (e) => {
+            cultureData.checkInterval = parseInt(e.target.value);
+            saveData();
+            log('CULTURE', 'Intervalle: ' + cultureData.checkInterval + 's', 'info');
+        };
+    }
+    
+    const checkNowBtn = document.getElementById('culture-check-now');
+    if (checkNowBtn) {
+        checkNowBtn.onclick = () => {
+            log('CULTURE', 'Verification manuelle...', 'info');
+            runCultureCycle();
+            updateStatusList();
+            updateTownsGrid();
+        };
+    }
     
     document.querySelectorAll('.section-header').forEach(header => {
         header.onclick = () => header.classList.toggle('collapsed');
@@ -744,14 +808,14 @@ function toggleCulture(enabled) {
     const status = document.getElementById('culture-status');
     
     if (enabled) {
-        ctrl.classList.remove('inactive');
-        status.textContent = 'Actif';
+        if (ctrl) ctrl.classList.remove('inactive');
+        if (status) status.textContent = 'Actif';
         log('CULTURE', 'Auto Culture active', 'success');
-        cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
-        runCultureCycle();
+        cultureData.nextCheckTime = Date.now() + 5000;
+        saveData();
     } else {
-        ctrl.classList.add('inactive');
-        status.textContent = 'En attente';
+        if (ctrl) ctrl.classList.add('inactive');
+        if (status) status.textContent = 'En attente';
         log('CULTURE', 'Auto Culture desactive', 'info');
     }
     
@@ -808,7 +872,8 @@ function updateTownsGrid() {
                             tooltip = 'Theatre requis';
                         }
                         
-                        const isActive = settings[celeb.id] && available;
+                        const isChecked = settings[celeb.id] === true;
+                        const isActive = isChecked && available;
                         
                         return `
                             <div class="culture-celebration-item ${!available ? 'disabled' : ''} ${isActive ? 'active' : ''}" 
@@ -817,7 +882,7 @@ function updateTownsGrid() {
                                  title="${tooltip}">
                                 <input type="checkbox" 
                                        class="culture-celebration-checkbox"
-                                       ${isActive ? 'checked' : ''}
+                                       ${isChecked ? 'checked' : ''}
                                        ${!available ? 'disabled' : ''}
                                        data-town="${townId}"
                                        data-celebration="${celeb.id}">
@@ -848,13 +913,15 @@ function updateTownsGrid() {
         };
     });
     
-    document.getElementById('culture-select-all')?.addEventListener('click', () => {
-        selectAllCelebrations(true);
-    });
+    const selectAllBtn = document.getElementById('culture-select-all');
+    if (selectAllBtn) {
+        selectAllBtn.onclick = () => selectAllCelebrations(true);
+    }
     
-    document.getElementById('culture-deselect-all')?.addEventListener('click', () => {
-        selectAllCelebrations(false);
-    });
+    const deselectAllBtn = document.getElementById('culture-deselect-all');
+    if (deselectAllBtn) {
+        deselectAllBtn.onclick = () => selectAllCelebrations(false);
+    }
 }
 
 function selectAllCelebrations(enable) {
@@ -949,17 +1016,25 @@ function startTimer() {
             return;
         }
         
-        const diff = cultureData.nextCheckTime - Date.now();
+        const now = Date.now();
+        const diff = cultureData.nextCheckTime - now;
         
         if (diff <= 0) {
+            el.textContent = '00:00';
+            el.classList.add('ready');
+            
             runCultureCycle();
-            cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
             updateStatusList();
+            updateTownsGrid();
+            
+            cultureData.nextCheckTime = now + cultureData.checkInterval * 1000;
+            saveData();
+            return;
         }
         
         el.classList.remove('ready');
-        const m = Math.max(0, Math.floor(diff / 60000)).toString().padStart(2, '0');
-        const s = Math.max(0, Math.floor((diff % 60000) / 1000)).toString().padStart(2, '0');
+        const m = Math.floor(diff / 60000).toString().padStart(2, '0');
+        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
         el.textContent = `${m}:${s}`;
         
     }, 1000);
@@ -982,7 +1057,8 @@ function saveData() {
         enabled: cultureData.enabled,
         townSettings: cultureData.townSettings,
         stats: cultureData.stats,
-        checkInterval: cultureData.checkInterval
+        checkInterval: cultureData.checkInterval,
+        nextCheckTime: cultureData.nextCheckTime
     }));
 }
 
@@ -995,6 +1071,7 @@ function loadData() {
             cultureData.townSettings = d.townSettings || {};
             cultureData.stats = d.stats || cultureData.stats;
             cultureData.checkInterval = d.checkInterval || 60;
+            cultureData.nextCheckTime = d.nextCheckTime || 0;
         } catch(e) {}
     }
 }
