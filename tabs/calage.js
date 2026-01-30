@@ -910,6 +910,12 @@ function togglePlan(planId) {
 
     if (calageData.plansActifs[planId]) {
         calageData.plansActifs[planId] = false;
+        
+        if (calageData.attaqueEnCours && calageData.attaqueEnCours._planId === planId) {
+            log('CALAGE', 'Arret de l\'attaque en cours du plan', 'warning');
+            calageData.attaqueEnCours = null;
+        }
+        
         log('CALAGE', 'Plan "' + plan.nom + '" arrete', 'info');
         afficherNotification('Plan arrete', plan.nom, 'info');
     } else {
@@ -1785,10 +1791,13 @@ function verifierEtLancerAttaque() {
             heureEnvoi: attaqueALancer.heureEnvoi,
             travelTime: attaqueALancer.travelTime,
             unites: attaqueALancer.unites,
+            heroId: attaqueALancer.heroId,
+            heroName: attaqueALancer.heroName,
             toleranceMoins: planDeLAttaque.toleranceMoins || 0,
             tolerancePlus: planDeLAttaque.tolerancePlus || 0,
             status: attaqueALancer.status,
             tentatives: attaqueALancer.tentatives || 0,
+            _planId: planDeLAttaque.id,
             _planIndex: calageData.plans.indexOf(planDeLAttaque),
             _atkIndex: planDeLAttaque.attaques.indexOf(attaqueALancer)
         };
@@ -1934,6 +1943,11 @@ function lancerAttaque(atk) {
 }
 
 function envoyerAttaque(atk) {
+    if (!doitContinuerAttaque(atk)) {
+        log('CALAGE', 'Attaque annulee (plan arrete ou attaque terminee)', 'warning');
+        return;
+    }
+
     const townId = atk.sourceId;
     const csrfToken = uw.Game.csrfToken;
     const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
@@ -1969,7 +1983,7 @@ function envoyerAttaque(atk) {
             majStatus('Erreur: ' + err);
 
             setTimeout(function() {
-                if (calageData.attaqueEnCours === atk) {
+                if (doitContinuerAttaque(atk)) {
                     atk.tentatives++;
                     console.log('[CALAGE] [ENVOI] Retry apres erreur, tentative #' + atk.tentatives);
                     envoyerAttaque(atk);
@@ -1979,8 +1993,33 @@ function envoyerAttaque(atk) {
     });
 }
 
+function doitContinuerAttaque(atk) {
+    if (calageData.attaqueEnCours !== atk) {
+        return false;
+    }
+    
+    if (atk.status === 'succes' || atk.status === 'echec') {
+        return false;
+    }
+    
+    if (atk._planId) {
+        if (!calageData.plansActifs[atk._planId]) {
+            log('CALAGE', 'Plan arrete, abandon de l\'attaque', 'warning');
+            calageData.attaqueEnCours = null;
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 function traiterReponseAttaque(response, atk) {
     log('CALAGE', 'Traitement reponse...', 'info');
+    
+    if (!doitContinuerAttaque(atk)) {
+        log('CALAGE', 'Attaque annulee pendant traitement', 'warning');
+        return;
+    }
     
     if (response.json && response.json.error) {
         const erreur = response.json.error;
@@ -1990,7 +2029,7 @@ function traiterReponseAttaque(response, atk) {
             log('CALAGE', 'Pas assez d\'unites, retry...', 'warning');
             majStatus('Attente unites...');
             setTimeout(function() {
-                if (calageData.attaqueEnCours === atk) {
+                if (doitContinuerAttaque(atk)) {
                     envoyerAttaque(atk);
                 }
             }, 500);
@@ -2087,6 +2126,11 @@ function traiterReponseAttaque(response, atk) {
         majStatus('Calage ' + signe + diffSec + 's - Retry...');
 
         annulerCommande(commandId).then(function() {
+            if (!doitContinuerAttaque(atk)) {
+                log('CALAGE', 'Attaque annulee apres annulation commande', 'warning');
+                return;
+            }
+            
             log('CALAGE', 'Commande annulee, attente troupes...', 'info');
             atk.tentatives++;
             
@@ -2104,11 +2148,19 @@ function traiterReponseAttaque(response, atk) {
 
             verifierTroupesRevenues(atk.unites).then(function() {
                 log('CALAGE', 'Troupes revenues, renvoi !', 'info');
-                envoyerAttaque(atk);
+                if (doitContinuerAttaque(atk)) {
+                    envoyerAttaque(atk);
+                } else {
+                    log('CALAGE', 'Attaque annulee apres retour troupes', 'warning');
+                }
             }).catch(function() {
                 log('CALAGE', 'Timeout troupes, renvoi quand meme...', 'warning');
                 setTimeout(function() {
-                    envoyerAttaque(atk);
+                    if (doitContinuerAttaque(atk)) {
+                        envoyerAttaque(atk);
+                    } else {
+                        log('CALAGE', 'Attaque annulee apres timeout troupes', 'warning');
+                    }
                 }, 1500);
             });
 
