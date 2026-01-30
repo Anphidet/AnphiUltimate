@@ -12,6 +12,7 @@
         { id: 'build', name: 'Build', icon: '🏗️', script: 'tabs/build.js' },
         { id: 'recruit', name: 'Recruit', icon: '⚔️', script: 'tabs/recruit.js' },
         { id: 'naval', name: 'Naval', icon: '⚓', script: 'tabs/naval.js' },
+        { id: 'culture', name: 'Culture', icon: '🎭', script: 'tabs/culture.js' },
         { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js' },
         { id: 'commerce', name: 'Commerce', icon: '🏪', script: 'tabs/commerce.js' },
         { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
