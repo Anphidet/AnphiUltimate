@@ -1095,39 +1095,110 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
     
     log('COMMERCE', 'Capacite OK (' + totalDemande + ' <= ' + availableCapacity + ')', 'success');
     
-    if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
-        log('COMMERCE', 'Utilisation gpAjax.ajaxPost...', 'info');
-        
-        const data = {
-            from: sourceId,
-            to: destId,
-            wood: wood,
-            iron: iron,
-            stone: stone,
-            town_id: sourceId,
-            nl_init: true
-        };
-        
-        log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
-        
-        uw.gpAjax.ajaxPost('town_overviews', 'trade_between_own_towns', data, true, function(response) {
-            log('COMMERCE', 'Reponse gpAjax: ' + JSON.stringify(response).substring(0, 200), 'info');
-            if (response?.error) {
-                log('COMMERCE', 'ECHEC - ' + response.error, 'error');
-                callback(false);
-                return;
-            }
-            log('COMMERCE', 'SUCCES - Envoye: ' + wood + ' bois, ' + stone + ' pierre, ' + iron + ' argent', 'success');
-            log('COMMERCE', sourceName + ' -> ' + destName, 'success');
-            callback(true);
-        }, null, destId);
+    log('COMMERCE', 'Recherche methode d\'envoi...', 'info');
+    
+    const csrfToken = uw.Game.csrfToken;
+    
+    if (trySendViaWindowSimulation(sourceId, destId, wood, stone, iron, callback)) {
         return;
     }
     
-    log('COMMERCE', 'gpAjax non disponible, utilisation $.ajax...', 'warning');
+    if (trySendViaGpAjax(sourceId, destId, wood, stone, iron, csrfToken, callback)) {
+        return;
+    }
     
-    const csrfToken = uw.Game.csrfToken;
-    const data = {
+    trySendViaDirectAjax(sourceId, destId, wood, stone, iron, csrfToken, callback);
+}
+
+function trySendViaWindowSimulation(sourceId, destId, wood, stone, iron, callback) {
+    log('COMMERCE', 'Tentative via simulation fenetre...', 'info');
+    
+    try {
+        const Layout = uw.Layout;
+        const WM = uw.GPWindowMgr || uw.WM;
+        
+        if (WM && typeof WM.Create === 'function') {
+            log('COMMERCE', 'GPWindowMgr.Create disponible', 'info');
+            
+            const windowTypes = WM.TYPE || {};
+            log('COMMERCE', 'Types de fenetres: ' + Object.keys(windowTypes).slice(0, 20).join(', '), 'info');
+            
+            if (windowTypes.TOWN_OVERVIEWS || windowTypes.TRADE) {
+                const winType = windowTypes.TRADE || windowTypes.TOWN_OVERVIEWS;
+                log('COMMERCE', 'Ouverture fenetre type: ' + winType, 'info');
+            }
+        }
+        
+        if (uw.TownOverviewWindowFactory) {
+            log('COMMERCE', 'TownOverviewWindowFactory trouve', 'info');
+            if (typeof uw.TownOverviewWindowFactory.openTradeWindow === 'function') {
+                uw.TownOverviewWindowFactory.openTradeWindow();
+            }
+        }
+        
+        if (Layout && typeof Layout.townOverview === 'function') {
+            log('COMMERCE', 'Layout.townOverview disponible', 'info');
+        }
+        
+        if (uw.hOpenWindow && typeof uw.hOpenWindow === 'function') {
+            log('COMMERCE', 'hOpenWindow disponible', 'info');
+        }
+        
+    } catch(e) {
+        log('COMMERCE', 'Erreur simulation fenetre: ' + e.message, 'warning');
+    }
+    
+    return false;
+}
+
+function trySendViaGpAjax(sourceId, destId, wood, stone, iron, csrfToken, callback) {
+    log('COMMERCE', 'Tentative via gpAjax...', 'info');
+    
+    try {
+        if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
+            log('COMMERCE', 'gpAjax.ajaxPost trouve', 'info');
+            
+            const postData = {
+                from: sourceId,
+                to: destId,
+                wood: wood,
+                iron: iron,
+                stone: stone,
+                town_id: sourceId,
+                nl_init: true
+            };
+            
+            uw.gpAjax.ajaxPost(
+                'town_overviews',
+                'trade_between_own_towns',
+                postData,
+                true,
+                function(response) {
+                    log('COMMERCE', 'gpAjax reponse: ' + JSON.stringify(response).substring(0, 200), 'info');
+                    if (response && !response.error) {
+                        log('COMMERCE', 'SUCCES via gpAjax', 'success');
+                        updateStatsAfterTrade(wood, stone, iron);
+                        callback(true);
+                    } else {
+                        log('COMMERCE', 'ECHEC gpAjax: ' + (response?.error || 'erreur inconnue'), 'error');
+                        callback(false);
+                    }
+                },
+                { town_id: destId }
+            );
+            return true;
+        }
+    } catch(e) {
+        log('COMMERCE', 'Erreur gpAjax: ' + e.message, 'error');
+    }
+    
+    return false;
+}
+
+function trySendViaDirectAjax(sourceId, destId, wood, stone, iron, csrfToken, callback) {
+    log('COMMERCE', 'Tentative via Ajax direct...', 'info');
+    
+    const postData = {
         from: sourceId,
         to: destId,
         wood: wood,
@@ -1137,36 +1208,110 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
         nl_init: true
     };
     
-    log('COMMERCE', 'Envoi en cours...', 'info');
-    log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
-    log('COMMERCE', 'URL: /game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns', 'info');
+    log('COMMERCE', 'JSON: ' + JSON.stringify(postData), 'info');
     
     uw.$.ajax({
         type: 'POST',
         url: '/game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns&h=' + csrfToken,
-        data: { json: JSON.stringify(data) },
+        data: { json: JSON.stringify(postData) },
         dataType: 'json',
         success: function(response) {
-            log('COMMERCE', 'Reponse: ' + JSON.stringify(response).substring(0, 200), 'info');
+            log('COMMERCE', 'Reponse: ' + JSON.stringify(response).substring(0, 300), 'info');
             if (response?.json?.error) {
-                log('COMMERCE', 'ECHEC - Erreur serveur: ' + response.json.error, 'error');
-                callback(false);
+                log('COMMERCE', 'ECHEC - ' + response.json.error, 'error');
+                tryAlternativeMethod(sourceId, destId, wood, stone, iron, csrfToken, callback);
                 return;
             }
-            if (response?.error) {
-                log('COMMERCE', 'ECHEC - ' + (response.error.message || response.error), 'error');
-                callback(false);
-                return;
-            }
-            log('COMMERCE', 'SUCCES - Envoye: ' + wood + ' bois, ' + stone + ' pierre, ' + iron + ' argent', 'success');
-            log('COMMERCE', sourceName + ' -> ' + destName, 'success');
+            log('COMMERCE', 'SUCCES via Ajax direct', 'success');
+            updateStatsAfterTrade(wood, stone, iron);
             callback(true);
         },
         error: function(xhr, status, error) {
-            log('COMMERCE', 'ECHEC - Erreur reseau: ' + (error || status), 'error');
+            log('COMMERCE', 'ECHEC reseau: ' + error, 'error');
+            tryAlternativeMethod(sourceId, destId, wood, stone, iron, csrfToken, callback);
+        }
+    });
+}
+
+function tryAlternativeMethod(sourceId, destId, wood, stone, iron, csrfToken, callback) {
+    log('COMMERCE', 'Tentative methode alternative (town_info)...', 'info');
+    
+    const altPostData = {
+        id: destId,
+        wood: wood,
+        stone: stone,
+        iron: iron,
+        town_id: sourceId,
+        nl_init: true
+    };
+    
+    uw.$.ajax({
+        type: 'POST',
+        url: '/game/town_info?town_id=' + sourceId + '&action=send_resources&h=' + csrfToken,
+        data: { json: JSON.stringify(altPostData) },
+        dataType: 'json',
+        success: function(response) {
+            log('COMMERCE', 'Reponse alt: ' + JSON.stringify(response).substring(0, 300), 'info');
+            if (response?.json?.error) {
+                log('COMMERCE', 'ECHEC alt - ' + response.json.error, 'error');
+                tryFinalMethod(sourceId, destId, wood, stone, iron, csrfToken, callback);
+                return;
+            }
+            log('COMMERCE', 'SUCCES via methode alternative', 'success');
+            updateStatsAfterTrade(wood, stone, iron);
+            callback(true);
+        },
+        error: function() {
+            log('COMMERCE', 'ECHEC methode alternative', 'error');
+            tryFinalMethod(sourceId, destId, wood, stone, iron, csrfToken, callback);
+        }
+    });
+}
+
+function tryFinalMethod(sourceId, destId, wood, stone, iron, csrfToken, callback) {
+    log('COMMERCE', 'Derniere tentative (trade action simple)...', 'info');
+    
+    const finalPostData = {
+        target_town_id: destId,
+        wood: wood,
+        stone: stone,
+        iron: iron,
+        nl_init: true
+    };
+    
+    uw.$.ajax({
+        type: 'POST',
+        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade&h=' + csrfToken,
+        data: { json: JSON.stringify(finalPostData) },
+        dataType: 'json',
+        success: function(response) {
+            log('COMMERCE', 'Reponse finale: ' + JSON.stringify(response).substring(0, 300), 'info');
+            if (response?.json?.error) {
+                log('COMMERCE', 'ECHEC COMPLET - Toutes les methodes ont echoue', 'error');
+                log('COMMERCE', 'Conseil: Verifiez que vous etes sur la bonne page du jeu', 'warning');
+                callback(false);
+                return;
+            }
+            log('COMMERCE', 'SUCCES via methode finale', 'success');
+            updateStatsAfterTrade(wood, stone, iron);
+            callback(true);
+        },
+        error: function() {
+            log('COMMERCE', 'ECHEC COMPLET - Erreur reseau', 'error');
             callback(false);
         }
     });
+}
+
+function updateStatsAfterTrade(wood, stone, iron) {
+    commerceData.stats.totalTrades++;
+    commerceData.stats.resourcesMoved += wood + stone + iron;
+    saveData();
+    
+    const statTrades = document.getElementById('commerce-stat-trades');
+    const statRes = document.getElementById('commerce-stat-resources');
+    if (statTrades) statTrades.textContent = commerceData.stats.totalTrades;
+    if (statRes) statRes.textContent = commerceData.stats.resourcesMoved;
 }
 
 function creerPlan() {
