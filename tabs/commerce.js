@@ -1097,26 +1097,25 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
     
     const csrfToken = uw.Game.csrfToken;
     const data = {
-        from: sourceId,
-        to: destId,
+        id: destId,
         wood: wood,
-        iron: iron,
         stone: stone,
+        iron: iron,
         town_id: sourceId,
         nl_init: true
     };
     
     log('COMMERCE', 'Envoi en cours...', 'info');
     log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
-    log('COMMERCE', 'URL: /game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns', 'info');
+    log('COMMERCE', 'URL: /game/town_info?town_id=' + sourceId + '&action=town_overviews_trade', 'info');
     
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns&h=' + csrfToken,
+        url: '/game/town_info?town_id=' + sourceId + '&action=town_overviews_trade&h=' + csrfToken,
         data: { json: JSON.stringify(data) },
         dataType: 'json',
         success: function(response) {
-            log('COMMERCE', 'Reponse: ' + JSON.stringify(response), 'info');
+            log('COMMERCE', 'Reponse: ' + JSON.stringify(response).substring(0, 200), 'info');
             if (response?.json?.error) {
                 log('COMMERCE', 'ECHEC - Erreur serveur: ' + response.json.error, 'error');
                 callback(false);
