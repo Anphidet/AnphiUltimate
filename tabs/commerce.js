@@ -1046,49 +1046,90 @@ function executerProchainEnvoi() {
 }
 
 function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
-    const availCap = getAvailableTradeCapacity(sourceId);
-    const total = wood + stone + iron;
+    const sourceName = getTownName(sourceId);
+    const destName = getTownName(destId);
+    const totalDemande = wood + stone + iron;
     
-    if (total > availCap) {
-        log('COMMERCE', 'Capacite insuffisante: ' + total + ' > ' + availCap, 'warning');
-        callback(false);
-        return;
-    }
+    log('COMMERCE', '--- Verification envoi: ' + sourceName + ' -> ' + destName + ' ---', 'info');
+    log('COMMERCE', 'Demande: ' + wood + ' bois, ' + stone + ' pierre, ' + iron + ' argent (total: ' + totalDemande + ')', 'info');
     
     const res = getResources(sourceId);
-    const actualWood = Math.min(wood, res.wood);
-    const actualStone = Math.min(stone, res.stone);
-    const actualIron = Math.min(iron, res.iron);
+    log('COMMERCE', 'Stock ' + sourceName + ': ' + res.wood + ' bois, ' + res.stone + ' pierre, ' + res.iron + ' argent', 'info');
     
-    if (actualWood + actualStone + actualIron === 0) {
-        log('COMMERCE', 'Pas assez de ressources dans ' + getTownName(sourceId), 'warning');
+    let manquant = [];
+    if (wood > 0 && res.wood < wood) {
+        manquant.push('Bois: ' + res.wood + '/' + wood + ' (manque ' + (wood - res.wood) + ')');
+    }
+    if (stone > 0 && res.stone < stone) {
+        manquant.push('Pierre: ' + res.stone + '/' + stone + ' (manque ' + (stone - res.stone) + ')');
+    }
+    if (iron > 0 && res.iron < iron) {
+        manquant.push('Argent: ' + res.iron + '/' + iron + ' (manque ' + (iron - res.iron) + ')');
+    }
+    
+    if (manquant.length > 0) {
+        log('COMMERCE', 'ANNULE - Ressources insuffisantes:', 'error');
+        manquant.forEach(function(m) {
+            log('COMMERCE', '  - ' + m, 'error');
+        });
         callback(false);
         return;
     }
+    
+    log('COMMERCE', 'Ressources OK', 'success');
+    
+    const maxCapacity = getTradeCapacity(sourceId);
+    const usedCapacity = getTradesInProgress(sourceId);
+    const availableCapacity = maxCapacity - usedCapacity;
+    
+    log('COMMERCE', 'Capacite commerce ' + sourceName + ': ' + usedCapacity + '/' + maxCapacity + ' utilise, ' + availableCapacity + ' disponible', 'info');
+    
+    if (totalDemande > availableCapacity) {
+        log('COMMERCE', 'ANNULE - Capacite insuffisante: ' + totalDemande + ' demande > ' + availableCapacity + ' disponible', 'error');
+        if (usedCapacity > 0) {
+            log('COMMERCE', 'Conseil: Attendez que les trades en cours arrivent (' + usedCapacity + ' en transit)', 'warning');
+        }
+        callback(false);
+        return;
+    }
+    
+    log('COMMERCE', 'Capacite OK (' + totalDemande + ' <= ' + availableCapacity + ')', 'success');
     
     const csrfToken = uw.Game.csrfToken;
     const data = {
-        id: destId,
-        wood: actualWood,
-        stone: actualStone,
-        iron: actualIron
+        from: sourceId,
+        to: destId,
+        wood: wood,
+        stone: stone,
+        iron: iron,
+        town_id: destId,
+        nl_init: true
     };
+    
+    log('COMMERCE', 'Envoi en cours...', 'info');
     
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade&h=' + csrfToken,
+        url: '/game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns&h=' + csrfToken,
         data: { json: JSON.stringify(data) },
         dataType: 'json',
         success: function(response) {
             if (response?.json?.error) {
-                log('COMMERCE', 'Erreur serveur: ' + response.json.error, 'error');
+                log('COMMERCE', 'ECHEC - Erreur serveur: ' + response.json.error, 'error');
                 callback(false);
                 return;
             }
+            if (response?.error) {
+                log('COMMERCE', 'ECHEC - ' + (response.error.message || response.error), 'error');
+                callback(false);
+                return;
+            }
+            log('COMMERCE', 'SUCCES - Envoye: ' + wood + ' bois, ' + stone + ' pierre, ' + iron + ' argent', 'success');
+            log('COMMERCE', sourceName + ' -> ' + destName, 'success');
             callback(true);
         },
-        error: function() {
-            log('COMMERCE', 'Erreur AJAX', 'error');
+        error: function(xhr, status, error) {
+            log('COMMERCE', 'ECHEC - Erreur reseau: ' + (error || status), 'error');
             callback(false);
         }
     });
