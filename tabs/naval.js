@@ -73,6 +73,17 @@ const shipBuildingRequirements = {
     'sea_monster': 1
 };
 
+const shipCostsFallback = {
+    'bireme': { wood: 400, stone: 300, iron: 180 },
+    'attack_ship': { wood: 500, stone: 500, iron: 250 },
+    'demolition_ship': { wood: 500, stone: 800, iron: 180 },
+    'small_transporter': { wood: 500, stone: 250, iron: 100 },
+    'big_transporter': { wood: 1000, stone: 500, iron: 250 },
+    'trireme': { wood: 2000, stone: 1600, iron: 750 },
+    'colonize_ship': { wood: 10000, stone: 10000, iron: 10000 },
+    'sea_monster': { wood: 0, stone: 0, iron: 0, favor: 250 }
+};
+
 function getCurrentCityId() { try { return uw.ITowns.getCurrentTown().id; } catch(e) { return null; } }
 function getCurrentTown() { try { return uw.MM.getModels().Town[getCurrentCityId()]; } catch(e) { return null; } }
 function getCurrentTownName() { try { return uw.ITowns.getCurrentTown().getName(); } catch(e) { return 'Ville inconnue'; } }
@@ -895,19 +906,31 @@ function runTargetMode(townId) {
             continue;
         }
         
-        const cost = unitData.resources;
-        if (!cost || !cost.wood || !cost.stone || !cost.iron) {
-            log('NAVAL', `[${cityName}] Cout de ${unitData.name} non trouve`, 'warning');
+        let cost = unitData.resources;
+        if (!cost) {
+            cost = { wood: 0, stone: 0, iron: 0 };
+            if (unitData.wood !== undefined) cost.wood = unitData.wood;
+            if (unitData.stone !== undefined) cost.stone = unitData.stone;
+            if (unitData.iron !== undefined) cost.iron = unitData.iron;
+        }
+        
+        const woodCost = cost.wood || 0;
+        const stoneCost = cost.stone || 0;
+        const ironCost = cost.iron || 0;
+        
+        if (woodCost === 0 && stoneCost === 0 && ironCost === 0) {
+            log('NAVAL', `[${cityName}] Cout de ${unitData.name} non trouve (resources: ${JSON.stringify(unitData.resources)})`, 'warning');
+            console.log('[NAVAL] unitData complet:', unitData);
             continue;
         }
         
-        const maxByWood = Math.floor(res.wood / cost.wood);
-        const maxByStone = Math.floor(res.stone / cost.stone);
-        const maxByIron = Math.floor(res.iron / cost.iron);
+        const maxByWood = woodCost > 0 ? Math.floor(res.wood / woodCost) : 999999;
+        const maxByStone = stoneCost > 0 ? Math.floor(res.stone / stoneCost) : 999999;
+        const maxByIron = ironCost > 0 ? Math.floor(res.iron / ironCost) : 999999;
         const maxAffordable = Math.min(maxByWood, maxByStone, maxByIron);
         
         if (maxAffordable <= 0) {
-            log('NAVAL', `[${cityName}] ${unitData.name}: Ressources insuffisantes (besoin: ${cost.wood}/${cost.stone}/${cost.iron})`, 'info');
+            log('NAVAL', `[${cityName}] ${unitData.name}: Ressources insuffisantes (besoin: ${woodCost}/${stoneCost}/${ironCost})`, 'info');
             continue;
         }
         
