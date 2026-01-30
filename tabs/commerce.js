@@ -1102,17 +1102,17 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
         wood: wood,
         iron: iron,
         stone: stone,
-        town_id: destId,
+        town_id: sourceId,
         nl_init: true
     };
     
     log('COMMERCE', 'Envoi en cours...', 'info');
     log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
-    log('COMMERCE', 'URL: /game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns', 'info');
+    log('COMMERCE', 'URL: /game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns', 'info');
     
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns&h=' + csrfToken,
+        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns&h=' + csrfToken,
         data: { json: JSON.stringify(data) },
         dataType: 'json',
         success: function(response) {
