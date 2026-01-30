@@ -135,63 +135,37 @@ function getUnitsInQueue() {
     const queued = {};
     try {
         const townId = getCurrentCityId();
-        const ct = uw.ITowns.getCurrentTown();
         
-        if (ct && typeof ct.docksOrders === 'function') {
-            const orders = ct.docksOrders();
-            if (orders && orders.models) {
-                orders.models.forEach(order => {
-                    const attrs = order.attributes || order;
-                    const unitId = attrs.unit_id;
-                    const count = attrs.units_left || attrs.count || 1;
-                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                });
-            } else if (orders && orders.length) {
-                orders.forEach(order => {
-                    const attrs = order.attributes || order;
-                    const unitId = attrs.unit_id || (order.getUnitId && order.getUnitId());
-                    const count = attrs.units_left || attrs.count || (order.getUnitsLeft && order.getUnitsLeft()) || 1;
-                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                });
-            }
-        }
-        
-        if (Object.keys(queued).length === 0 && ct && typeof ct.getDocksOrders === 'function') {
-            const orders = ct.getDocksOrders();
-            if (orders && orders.length) {
-                orders.forEach(order => {
-                    const attrs = order.attributes || order;
-                    const unitId = attrs.unit_id || (order.getUnitId && order.getUnitId());
-                    const count = attrs.units_left || attrs.count || 1;
-                    if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                });
-            }
-        }
-        
-        if (Object.keys(queued).length === 0 && uw.MM && uw.MM.getModels) {
+        if (uw.MM && uw.MM.getModels) {
             const models = uw.MM.getModels();
             
             if (models.UnitOrder) {
                 for (let id in models.UnitOrder) {
                     const order = models.UnitOrder[id];
                     const attrs = order.attributes || order;
-                    if (attrs.town_id == townId && attrs.kind === 'docks') {
+                    if (attrs.town_id == townId) {
                         const unitId = attrs.unit_id;
-                        const count = attrs.units_left || attrs.count || 1;
-                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                        const unitData = uw.GameData.units[unitId];
+                        if (unitData && unitData.is_naval) {
+                            const count = attrs.units_left || attrs.count || 1;
+                            if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                        }
                     }
                 }
             }
-            
-            if (Object.keys(queued).length === 0 && models.DocksOrder) {
-                for (let id in models.DocksOrder) {
-                    const order = models.DocksOrder[id];
-                    const attrs = order.attributes || order;
-                    if (attrs.town_id == townId) {
+        }
+        
+        if (Object.keys(queued).length === 0) {
+            const ct = uw.ITowns.getCurrentTown();
+            if (ct && typeof ct.docksOrders === 'function') {
+                const orders = ct.docksOrders();
+                if (orders && orders.models) {
+                    orders.models.forEach(order => {
+                        const attrs = order.attributes || order;
                         const unitId = attrs.unit_id;
                         const count = attrs.units_left || attrs.count || 1;
                         if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                    }
+                    });
                 }
             }
         }
@@ -359,6 +333,7 @@ module.render = function(container) {
                         <span class="stat-label">Cycles</span>
                     </div>
                 </div>
+                <button class="btn" style="width:100%;margin-top:12px;background:linear-gradient(135deg,#6c757d,#495057);" id="naval-debug">Debug Info</button>
             </div>
         </div>
     `;
@@ -403,6 +378,7 @@ module.init = function() {
     document.getElementById('naval-export-plans').onclick = () => exportPlans();
     document.getElementById('naval-import-plans').onclick = () => document.getElementById('naval-import-file').click();
     document.getElementById('naval-import-file').onchange = (e) => importPlans(e);
+    document.getElementById('naval-debug').onclick = () => debugNavalInfo();
 
     document.querySelectorAll('#tab-naval .section-header').forEach(h => {
         h.onclick = () => {
@@ -890,6 +866,90 @@ function importPlans(event) {
     };
     reader.readAsText(file);
     event.target.value = '';
+}
+
+function debugNavalInfo() {
+    log('NAVAL', '=== DEBUG INFO ===', 'info');
+    
+    try {
+        const ct = uw.ITowns.getCurrentTown();
+        const townId = getCurrentCityId();
+        
+        log('NAVAL', 'Town ID: ' + townId, 'info');
+        log('NAVAL', 'Town Name: ' + getCurrentTownName(), 'info');
+        
+        log('NAVAL', '--- Methods disponibles sur CurrentTown ---', 'info');
+        const methods = [];
+        for (let key in ct) {
+            if (typeof ct[key] === 'function' && (key.includes('dock') || key.includes('Dock') || key.includes('order') || key.includes('Order') || key.includes('unit') || key.includes('Unit'))) {
+                methods.push(key);
+            }
+        }
+        log('NAVAL', 'Methods: ' + methods.join(', '), 'info');
+        
+        log('NAVAL', '--- docksOrders ---', 'info');
+        if (typeof ct.docksOrders === 'function') {
+            const orders = ct.docksOrders();
+            log('NAVAL', 'docksOrders() type: ' + typeof orders, 'info');
+            if (orders) {
+                log('NAVAL', 'docksOrders() keys: ' + Object.keys(orders).join(', '), 'info');
+                if (orders.models) {
+                    log('NAVAL', 'docksOrders().models.length: ' + orders.models.length, 'info');
+                    if (orders.models.length > 0) {
+                        log('NAVAL', 'Premier ordre: ' + JSON.stringify(orders.models[0].attributes || orders.models[0]), 'info');
+                    }
+                } else if (orders.length !== undefined) {
+                    log('NAVAL', 'docksOrders().length: ' + orders.length, 'info');
+                    if (orders.length > 0) {
+                        log('NAVAL', 'Premier ordre: ' + JSON.stringify(orders[0].attributes || orders[0]), 'info');
+                    }
+                }
+            }
+        } else {
+            log('NAVAL', 'docksOrders non disponible', 'warning');
+        }
+        
+        log('NAVAL', '--- MM.getModels ---', 'info');
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            const modelKeys = Object.keys(models);
+            const orderModels = modelKeys.filter(k => k.includes('Order') || k.includes('order'));
+            log('NAVAL', 'Models avec Order: ' + orderModels.join(', '), 'info');
+            
+            orderModels.forEach(modelName => {
+                const model = models[modelName];
+                const count = Object.keys(model).length;
+                log('NAVAL', modelName + ': ' + count + ' entrees', 'info');
+                if (count > 0) {
+                    const firstKey = Object.keys(model)[0];
+                    const first = model[firstKey];
+                    if (first && first.attributes) {
+                        log('NAVAL', modelName + ' exemple: ' + JSON.stringify(first.attributes), 'info');
+                    }
+                }
+            });
+        }
+        
+        log('NAVAL', '--- Units in town ---', 'info');
+        const units = getUnitsInTown();
+        const navalUnits = {};
+        NAVAL_UNITS.forEach(id => {
+            if (units[id]) navalUnits[id] = units[id];
+        });
+        MYTHICAL_SHIPS.forEach(id => {
+            if (units[id]) navalUnits[id] = units[id];
+        });
+        log('NAVAL', 'Naval units: ' + JSON.stringify(navalUnits), 'info');
+        
+        log('NAVAL', '--- Queue detection result ---', 'info');
+        const queued = getUnitsInQueue();
+        log('NAVAL', 'Queued units: ' + JSON.stringify(queued), 'info');
+        
+        log('NAVAL', '=== FIN DEBUG ===', 'info');
+        
+    } catch(e) {
+        log('NAVAL', 'Erreur debug: ' + e.message, 'error');
+    }
 }
 
 function setupTownChangeObserver() {
