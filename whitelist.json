@@ -13,25 +13,26 @@
             "name": "Mipose62",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "Grinta",
             "playerId": 0,
             "servers": ["fr179"],
-            "modules": ["info", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "TCHAPALO",
             "playerId": 0,
             "servers": ["fr179"],
-            "modules": ["info", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
 
 
