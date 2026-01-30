@@ -282,6 +282,8 @@ module.render = function(container) {
                     <div class="option-group">
                         <span class="option-label">Intervalle (min)</span>
                         <select class="option-select" id="naval-interval">
+                            <option value="0.16">10 sec</option>
+                            <option value="0.5">30 sec</option>
                             <option value="1">1 min</option>
                             <option value="2">2 min</option>
                             <option value="5">5 min</option>
@@ -336,10 +338,12 @@ module.init = function() {
     
     document.getElementById('toggle-naval').onchange = (e) => toggleNaval(e.target.checked);
     document.getElementById('naval-interval').onchange = (e) => {
-        navalData.settings.checkInterval = parseInt(e.target.value);
+        navalData.settings.checkInterval = parseFloat(e.target.value);
         navalData.nextCheckTime = Date.now() + navalData.settings.checkInterval * 60000;
         saveData();
-        log('NAVAL', 'Intervalle: ' + e.target.value + ' min', 'info');
+        const val = parseFloat(e.target.value);
+        const label = val < 1 ? (val * 60) + ' sec' : val + ' min';
+        log('NAVAL', 'Intervalle: ' + label, 'info');
     };
     document.getElementById('naval-mode').onchange = (e) => {
         navalData.settings.recruitMode = e.target.value;
