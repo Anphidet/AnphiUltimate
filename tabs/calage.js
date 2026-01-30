@@ -23,6 +23,11 @@ let notifsContainer = null;
 let dernieresNotifs = {};
 let dernierLogCheck = 0;
 let calculEnCours = {};
+let planEnEdition = null;
+
+function genererID() {
+    return 'id_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
 
 const GROUND_UNITS = ['sword', 'slinger', 'archer', 'hoplite', 'rider', 'chariot', 'catapult', 'minotaur', 'manticore', 'centaur', 'pegasus', 'harpy', 'medusa', 'zyklop', 'cerberus', 'fury', 'griffin', 'calydonian_boar', 'godsent', 'satyr', 'spartoi', 'ladon', 'siren'];
 const NAVAL_UNITS = ['big_transporter', 'bireme', 'attack_ship', 'demolition_ship', 'small_transporter', 'trireme', 'colonize_ship', 'sea_monster'];
@@ -717,42 +722,44 @@ module.init = function() {
     loadData();
     initNotifications();
 
-    document.getElementById('toggle-calage').checked = calageData.botActif;
-    updateControlState();
-    majVillesSelect();
-    majUnitsGrid();
-    majListeAttaques();
-    updatePlansList();
-
-    document.getElementById('toggle-calage').onchange = (e) => toggleBot(e.target.checked);
-    document.getElementById('calage-btn-ajouter').onclick = ajouterAttaque;
-    document.getElementById('calage-btn-clear').onclick = supprimerToutesAttaques;
-    document.getElementById('calage-ville-source').onchange = () => { majUnitsGrid(); };
-    document.getElementById('calage-ville-cible').onchange = () => updateTravelInfo();
-    document.getElementById('calage-heure-arrivee').onchange = () => updateTravelInfo();
-    document.getElementById('calage-btn-planifier').onclick = planifierAttaques;
-    document.getElementById('calage-save-plan').onclick = savePlan;
-    document.getElementById('calage-export-plans').onclick = exportPlans;
-    document.getElementById('calage-import-plans').onclick = () => document.getElementById('calage-import-file').click();
-    document.getElementById('calage-import-file').onchange = (e) => importPlans(e);
-
-    document.querySelectorAll('#tab-calage .section-header').forEach(h => {
-        h.onclick = () => {
-            h.classList.toggle('collapsed');
-            const c = h.nextElementSibling;
-            if (c) c.style.display = h.classList.contains('collapsed') ? 'none' : 'block';
-        };
+    document.querySelectorAll('.calage-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            changerVue(this.getAttribute('data-view'));
+        });
     });
 
+    const btnCreerPlan = document.getElementById('calage-btn-creer-plan');
+    if (btnCreerPlan) btnCreerPlan.onclick = creerPlan;
+
+    const btnAjouterAttaque = document.getElementById('calage-btn-ajouter-attaque');
+    if (btnAjouterAttaque) btnAjouterAttaque.onclick = ajouterAttaqueAuPlan;
+
+    const btnRetour = document.getElementById('calage-btn-retour');
+    if (btnRetour) btnRetour.onclick = function() { changerVue('plans'); };
+
+    const btnSauver = document.getElementById('calage-btn-sauver-plan');
+    if (btnSauver) btnSauver.onclick = sauvegarderPlanEdite;
+
+    const btnToggleBot = document.getElementById('calage-btn-toggle-bot');
+    if (btnToggleBot) btnToggleBot.onclick = function() { toggleBot(!calageData.botActif); };
+
+    const editSource = document.getElementById('calage-edit-source');
+    if (editSource) editSource.onchange = majUnitsEdition;
+
+    majListePlans();
+    updateBotButton();
+
     uw.$.Observer(uw.GameEvents.town.town_switch).subscribe('gu_calage', function() {
-        majUnitsGrid();
+        if (planEnEdition !== null) {
+            majUnitsEdition();
+        }
     });
 
     if (calageData.botActif) {
         demarrerBot();
     }
 
-    log('CALAGE', 'Module initialise - ' + calageData.attaques.length + ' attaques', 'info');
+    log('CALAGE', 'Module initialise - ' + calageData.plans.length + ' plans', 'info');
 };
 
 module.isActive = function() {
@@ -760,11 +767,409 @@ module.isActive = function() {
 };
 
 module.onActivate = function(container) {
-    majVillesSelect();
-    majUnitsGrid();
-    majListeAttaques();
-    updatePlansList();
+    majListePlans();
+    updateBotButton();
 };
+
+function changerVue(vue) {
+    document.querySelectorAll('.calage-tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.calage-view').forEach(function(v) { v.classList.remove('active'); });
+
+    const tab = document.querySelector('.calage-tab[data-view="' + vue + '"]');
+    const view = document.getElementById('calage-view-' + vue);
+
+    if (tab) tab.classList.add('active');
+    if (view) view.classList.add('active');
+
+    if (vue === 'plans') {
+        document.getElementById('calage-tab-edition').style.display = 'none';
+        planEnEdition = null;
+        majListePlans();
+    }
+}
+
+function majListePlans() {
+    const container = document.getElementById('calage-plans-liste');
+    if (!container) return;
+
+    if (calageData.plans.length === 0) {
+        container.innerHTML = '<div class="calage-empty">' +
+            '<div class="calage-empty-icon">📋</div>' +
+            '<div class="calage-empty-text">Aucun plan cree</div>' +
+            '<div class="calage-empty-hint">Cliquez sur "Nouveau Plan" pour commencer</div>' +
+        '</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+
+    calageData.plans.forEach(function(plan, index) {
+        const attaquesEnAttente = plan.attaques.filter(function(a) { return a.status === 'attente'; }).length;
+        const attaquesSucces = plan.attaques.filter(function(a) { return a.status === 'succes'; }).length;
+
+        const div = document.createElement('div');
+        div.className = 'calage-plan-item';
+        div.innerHTML = 
+            '<div class="calage-plan-header">' +
+                '<div>' +
+                    '<div class="calage-plan-name">' + (plan.type === 'attack' ? '⚔️' : '🛡️') + ' ' + plan.nom + '</div>' +
+                    '<div class="calage-plan-target">Cible: ' + plan.cibleId + '</div>' +
+                '</div>' +
+                '<div class="calage-plan-actions">' +
+                    '<button class="calage-btn calage-btn-primary calage-btn-sm btn-edit" data-index="' + index + '">✏️ Editer</button>' +
+                    '<button class="calage-btn calage-btn-danger calage-btn-sm btn-suppr" data-index="' + index + '">🗑️</button>' +
+                '</div>' +
+            '</div>' +
+            '<div class="calage-plan-stats">' +
+                '<span>📊 ' + plan.attaques.length + ' attaques</span>' +
+                '<span>⏳ ' + attaquesEnAttente + ' en attente</span>' +
+                '<span>✅ ' + attaquesSucces + ' reussies</span>' +
+            '</div>';
+        container.appendChild(div);
+    });
+
+    container.querySelectorAll('.btn-edit').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            editerPlan(parseInt(this.getAttribute('data-index')));
+        });
+    });
+
+    container.querySelectorAll('.btn-suppr').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const idx = parseInt(this.getAttribute('data-index'));
+            if (confirm('Supprimer le plan "' + calageData.plans[idx].nom + '" ?')) {
+                calageData.plans.splice(idx, 1);
+                saveData();
+                majListePlans();
+                afficherNotification('Plan supprime', 'Le plan a ete supprime', 'info');
+            }
+        });
+    });
+}
+
+function creerPlan() {
+    const nom = document.getElementById('calage-new-nom').value.trim();
+    const type = document.getElementById('calage-new-type').value;
+    const cible = parseInt(document.getElementById('calage-new-cible').value);
+    const tolMoins = parseInt(document.getElementById('calage-new-tol-moins').value) || 0;
+    const tolPlus = parseInt(document.getElementById('calage-new-tol-plus').value) || 0;
+
+    if (!nom || !cible) {
+        afficherNotification('Erreur', 'Veuillez remplir le nom et la ville cible', 'warning');
+        return;
+    }
+
+    const plan = {
+        id: genererID(),
+        nom: nom,
+        type: type,
+        cibleId: cible,
+        toleranceMoins: tolMoins,
+        tolerancePlus: tolPlus,
+        attaques: [],
+        dateCreation: Date.now()
+    };
+
+    calageData.plans.push(plan);
+    saveData();
+
+    document.getElementById('calage-new-nom').value = '';
+    document.getElementById('calage-new-cible').value = '';
+
+    editerPlan(calageData.plans.length - 1);
+
+    afficherNotification('Plan cree', 'Le plan "' + nom + '" a ete cree', 'success');
+}
+
+function editerPlan(index) {
+    const plan = calageData.plans[index];
+    if (!plan) return;
+
+    planEnEdition = index;
+
+    document.getElementById('calage-tab-edition').style.display = 'block';
+    document.getElementById('calage-edit-plan-id').value = plan.id;
+    document.getElementById('calage-edit-plan-nom').textContent = plan.nom;
+    document.getElementById('calage-edit-nom').value = plan.nom;
+    document.getElementById('calage-edit-cible').value = plan.cibleId;
+    document.getElementById('calage-edit-tol-moins').value = plan.toleranceMoins || 0;
+    document.getElementById('calage-edit-tol-plus').value = plan.tolerancePlus || 0;
+
+    const select = document.getElementById('calage-edit-source');
+    const villes = getVillesJoueur();
+    select.innerHTML = '';
+    villes.forEach(function(v) {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = v.name + ' (' + v.id + ')';
+        if (v.id === uw.Game.townId) opt.selected = true;
+        select.appendChild(opt);
+    });
+
+    majUnitsEdition();
+    majAttaquesPlan();
+
+    changerVue('edition');
+}
+
+function majUnitsEdition() {
+    const sourceId = parseInt(document.getElementById('calage-edit-source').value);
+    const unitesDispo = getUnitesDispo(sourceId);
+
+    const gridTerre = document.getElementById('calage-edit-units-terre');
+    const gridNaval = document.getElementById('calage-edit-units-naval');
+
+    gridTerre.innerHTML = '';
+    gridNaval.innerHTML = '';
+
+    GROUND_UNITS.forEach(function(unitId) {
+        const dispo = unitesDispo[unitId] || 0;
+        if (dispo > 0) {
+            gridTerre.appendChild(creerCarteUnite(unitId, dispo));
+        }
+    });
+
+    NAVAL_UNITS.forEach(function(unitId) {
+        const dispo = unitesDispo[unitId] || 0;
+        if (dispo > 0) {
+            gridNaval.appendChild(creerCarteUnite(unitId, dispo));
+        }
+    });
+
+    if (gridTerre.children.length === 0) {
+        gridTerre.innerHTML = '<div style="grid-column: span 5; text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune unite terrestre</div>';
+    }
+    if (gridNaval.children.length === 0) {
+        gridNaval.innerHTML = '<div style="grid-column: span 5; text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune unite navale</div>';
+    }
+
+    majCapacite();
+}
+
+function creerCarteUnite(unitId, dispo) {
+    const unitData = uw.GameData.units[unitId] || {};
+    const unitName = unitData.name || unitId;
+    
+    const div = document.createElement('div');
+    div.className = 'calage-unit-card';
+    div.innerHTML = 
+        '<div class="unit_icon40x40 ' + unitId + '" style="margin:0 auto 4px;"></div>' +
+        '<div class="unit-name">' + unitName + '</div>' +
+        '<div class="unit-dispo">Dispo: ' + dispo + '</div>' +
+        '<input type="number" min="0" max="' + dispo + '" value="0" data-unit="' + unitId + '" data-max="' + dispo + '">';
+
+    const input = div.querySelector('input');
+    input.addEventListener('input', function() {
+        let val = parseInt(this.value) || 0;
+        const max = parseInt(this.getAttribute('data-max'));
+
+        if (val > max) {
+            this.value = max;
+            val = max;
+        } else if (val < 0) {
+            this.value = 0;
+            val = 0;
+        }
+
+        div.classList.toggle('has-units', val > 0);
+        majCapacite();
+    });
+
+    return div;
+}
+
+function majCapacite() {
+    const container = document.getElementById('calage-capacity-container');
+    const fill = document.getElementById('calage-capacity-fill');
+    const text = document.getElementById('calage-capacity-text');
+    
+    if (!container) return;
+
+    const units = recupererUnitesEdition();
+    const sourceId = parseInt(document.getElementById('calage-edit-source').value) || uw.Game.townId;
+    
+    if (!hasGroundUnits(units)) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    container.style.display = 'block';
+    
+    const boatInfo = calculateRequiredBoats(units, sourceId);
+    
+    text.textContent = boatInfo.totalCapacity + ' / ' + boatInfo.totalPop + ' pop';
+    fill.style.width = Math.min(100, boatInfo.percentage) + '%';
+    
+    fill.classList.remove('warning', 'error');
+    if (boatInfo.percentage >= 100) {
+        fill.classList.remove('warning', 'error');
+    } else if (boatInfo.percentage >= 50) {
+        fill.classList.add('warning');
+    } else {
+        fill.classList.add('error');
+    }
+}
+
+function recupererUnitesEdition() {
+    const units = {};
+    document.querySelectorAll('#calage-edit-units-terre input, #calage-edit-units-naval input').forEach(function(input) {
+        const unitId = input.getAttribute('data-unit');
+        const val = parseInt(input.value) || 0;
+        if (val > 0) {
+            units[unitId] = val;
+        }
+    });
+    return units;
+}
+
+function ajouterAttaqueAuPlan() {
+    if (planEnEdition === null) return;
+
+    const plan = calageData.plans[planEnEdition];
+    if (!plan) return;
+
+    const sourceId = parseInt(document.getElementById('calage-edit-source').value);
+    const heure = document.getElementById('calage-edit-heure').value;
+    const units = recupererUnitesEdition();
+
+    if (!sourceId || !heure) {
+        afficherNotification('Erreur', 'Veuillez selectionner une ville et une heure', 'warning');
+        return;
+    }
+
+    if (Object.keys(units).length === 0) {
+        afficherNotification('Erreur', 'Veuillez selectionner des unites', 'warning');
+        return;
+    }
+
+    if (hasGroundUnits(units)) {
+        const boatInfo = calculateRequiredBoats(units, sourceId);
+        if (!boatInfo.hasEnoughBoats) {
+            afficherNotification('Erreur', 'Pas assez de bateaux de transport!', 'warning');
+            return;
+        }
+    }
+
+    const villes = getVillesJoueur();
+    const ville = villes.find(function(v) { return v.id === sourceId; });
+    const villeNom = ville ? ville.name : ('Ville ' + sourceId);
+
+    const attaque = {
+        id: genererID(),
+        sourceId: sourceId,
+        sourceNom: villeNom + ' (' + sourceId + ')',
+        heureArrivee: heure,
+        heureEnvoi: null,
+        travelTime: null,
+        unites: units,
+        status: 'attente',
+        tentatives: 0
+    };
+
+    plan.attaques.push(attaque);
+    saveData();
+
+    document.querySelectorAll('#calage-edit-units-terre input, #calage-edit-units-naval input').forEach(function(input) {
+        input.value = 0;
+        input.parentElement.classList.remove('has-units');
+    });
+    majCapacite();
+
+    majAttaquesPlan();
+
+    afficherNotification('Attaque ajoutee', villeNom + ' -> ' + plan.cibleId + ' @ ' + heure, 'success');
+}
+
+function majAttaquesPlan() {
+    if (planEnEdition === null) return;
+
+    const plan = calageData.plans[planEnEdition];
+    if (!plan) return;
+
+    const container = document.getElementById('calage-edit-attaques-liste');
+    const countEl = document.getElementById('calage-edit-attaques-count');
+
+    countEl.textContent = plan.attaques.length;
+
+    if (plan.attaques.length === 0) {
+        container.innerHTML = '<div class="calage-empty" style="padding:20px;">' +
+            '<div class="calage-empty-text">Aucune attaque dans ce plan</div>' +
+        '</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+
+    plan.attaques.forEach(function(atk, idx) {
+        const unitsList = Object.keys(atk.unites).map(function(u) { 
+            return u + ':' + atk.unites[u]; 
+        }).join(', ');
+
+        const statusClass = atk.status === 'succes' ? 'succes' : (atk.status === 'encours' ? 'encours' : '');
+        const statusLabel = atk.status === 'succes' ? 'Succes' : (atk.status === 'encours' ? 'En cours' : 'En attente');
+        const statusBadgeClass = atk.status === 'succes' ? 'calage-status-succes' : (atk.status === 'encours' ? 'calage-status-encours' : 'calage-status-attente');
+
+        const div = document.createElement('div');
+        div.className = 'calage-attaque-item ' + statusClass;
+        div.innerHTML = 
+            '<div class="calage-attaque-ville">' +
+                '<div class="calage-attaque-ville-name">' + atk.sourceNom + '</div>' +
+                '<div class="calage-attaque-ville-units">' + unitsList + '</div>' +
+            '</div>' +
+            '<div class="calage-attaque-heure">' +
+                atk.heureArrivee +
+                '<small>Arrivee</small>' +
+            '</div>' +
+            '<span class="calage-attaque-status ' + statusBadgeClass + '">' + statusLabel + '</span>' +
+            '<button class="calage-btn calage-btn-danger calage-btn-sm btn-suppr-atk" data-idx="' + idx + '">🗑️</button>';
+        container.appendChild(div);
+    });
+
+    container.querySelectorAll('.btn-suppr-atk').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const idx = parseInt(this.getAttribute('data-idx'));
+            plan.attaques.splice(idx, 1);
+            saveData();
+            majAttaquesPlan();
+            afficherNotification('Attaque supprimee', '', 'info');
+        });
+    });
+}
+
+function sauvegarderPlanEdite() {
+    if (planEnEdition === null) return;
+
+    const plan = calageData.plans[planEnEdition];
+    if (!plan) return;
+
+    plan.nom = document.getElementById('calage-edit-nom').value.trim() || plan.nom;
+    plan.cibleId = parseInt(document.getElementById('calage-edit-cible').value) || plan.cibleId;
+    plan.toleranceMoins = parseInt(document.getElementById('calage-edit-tol-moins').value) || 0;
+    plan.tolerancePlus = parseInt(document.getElementById('calage-edit-tol-plus').value) || 0;
+
+    saveData();
+
+    afficherNotification('Plan sauvegarde', 'Le plan "' + plan.nom + '" a ete sauvegarde', 'success');
+}
+
+function updateBotButton() {
+    const btn = document.getElementById('calage-btn-toggle-bot');
+    const status = document.getElementById('calage-status');
+    
+    if (calageData.botActif) {
+        if (btn) {
+            btn.textContent = '⏹️ Arreter';
+            btn.className = 'calage-btn calage-btn-danger calage-btn-sm';
+        }
+        if (status) status.textContent = 'Status: Surveillance...';
+    } else {
+        if (btn) {
+            btn.textContent = '▶️ Demarrer';
+            btn.className = 'calage-btn calage-btn-success calage-btn-sm';
+        }
+        if (status) status.textContent = 'Status: En attente';
+    }
+}
 
 function toggleBot(enabled) {
     calageData.botActif = enabled;
@@ -775,7 +1180,7 @@ function toggleBot(enabled) {
         arreterBot();
     }
     
-    updateControlState();
+    updateBotButton();
     saveData();
     
     if (window.GrepolisUltimate) {
@@ -783,24 +1188,19 @@ function toggleBot(enabled) {
     }
 }
 
-function updateControlState() {
-    const ctrl = document.getElementById('calage-control');
-    const status = document.getElementById('calage-status');
-    
-    if (calageData.botActif) {
-        ctrl.classList.remove('inactive');
-        status.textContent = 'Surveillance...';
-    } else {
-        ctrl.classList.add('inactive');
-        status.textContent = 'En attente';
-    }
-}
-
 function demarrerBot() {
+    let totalAttaques = 0;
+    let attaquesEnAttente = 0;
+    
+    calageData.plans.forEach(function(plan) {
+        totalAttaques += plan.attaques.length;
+        attaquesEnAttente += plan.attaques.filter(function(a) { return a.status === 'attente'; }).length;
+    });
+    
     console.log('[CALAGE] ========================================');
     console.log('[CALAGE] BOT DEMARRE !');
-    console.log('[CALAGE] Attaques en memoire:', calageData.attaques.length);
-    const attaquesEnAttente = calageData.attaques.filter(a => a.status === 'attente').length;
+    console.log('[CALAGE] Plans:', calageData.plans.length);
+    console.log('[CALAGE] Attaques totales:', totalAttaques);
     console.log('[CALAGE] Attaques en attente:', attaquesEnAttente);
     console.log('[CALAGE] Intervalle de verification: 500ms');
     console.log('[CALAGE] ========================================');
@@ -808,7 +1208,7 @@ function demarrerBot() {
     log('CALAGE', 'Bot demarre', 'success');
     majStatus('Surveillance...');
     
-    afficherNotification('Bot demarre', 'Surveillance de ' + calageData.attaques.length + ' attaque(s)', 'info');
+    afficherNotification('Bot demarre', 'Surveillance de ' + totalAttaques + ' attaque(s) dans ' + calageData.plans.length + ' plan(s)', 'info');
 
     calageData.intervalCheck = setInterval(function() {
         if (!calageData.botActif) return;
@@ -881,667 +1281,6 @@ function majVillesSelect() {
     });
 }
 
-function majUnitsGrid() {
-    const groundGrid = document.getElementById('calage-ground-units');
-    const navalGrid = document.getElementById('calage-naval-units');
-    if (!groundGrid || !navalGrid) return;
-    
-    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
-    const availableUnits = getAvailableUnitsForTown(sourceId);
-    
-    const groundUnits = availableUnits.filter(u => !u.isNaval);
-    const navalUnits = availableUnits.filter(u => u.isNaval);
-    
-    if (groundUnits.length === 0) {
-        groundGrid.innerHTML = '<div style="grid-column: span 4; text-align: center; color: #8B8B83; padding: 15px; font-style: italic;">Aucune troupe terrestre</div>';
-    } else {
-        groundGrid.innerHTML = groundUnits.map(u => `
-            <div class="calage-unit-input">
-                <div class="unit_icon40x40 ${u.id} unit-icon"></div>
-                <label>${u.name}</label>
-                <span class="unit-count">(${u.count})</span>
-                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-pop="${u.pop}">
-            </div>
-        `).join('');
-    }
-    
-    if (navalUnits.length === 0) {
-        navalGrid.innerHTML = '<div style="grid-column: span 4; text-align: center; color: #8B8B83; padding: 15px; font-style: italic;">Aucune flotte</div>';
-    } else {
-        navalGrid.innerHTML = navalUnits.map(u => `
-            <div class="calage-unit-input" style="${u.isTransport ? 'border-color: #4CAF50;' : ''}">
-                <div class="unit_icon40x40 ${u.id} unit-icon"></div>
-                <label>${u.name}</label>
-                <span class="unit-count">(${u.count})</span>
-                <input type="number" id="unit-${u.id}" min="0" max="${u.count}" value="0" data-unit="${u.id}" data-transport="${u.isTransport}">
-            </div>
-        `).join('');
-    }
-    
-    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
-        inp.addEventListener('input', () => {
-            updateBoatIndicator();
-            updateTravelInfo();
-        });
-    });
-    
-    updateBoatIndicator();
-    updateTravelInfo();
-}
-
-function updateBoatIndicator() {
-    const indicator = document.getElementById('calage-boat-indicator');
-    const bar = document.getElementById('calage-boat-bar');
-    const text = document.getElementById('calage-boat-text');
-    const warning = document.getElementById('calage-boat-warning');
-    const researchInfo = document.getElementById('calage-research-info');
-    
-    if (!indicator) return;
-    
-    const units = getSelectedUnits();
-    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
-    
-    if (!hasGroundUnits(units)) {
-        indicator.style.display = 'none';
-        return;
-    }
-    
-    indicator.style.display = 'block';
-    
-    const boatInfo = calculateRequiredBoats(units, sourceId);
-    const hasBoatResearch = hasResearch(sourceId, 'ship_transport');
-    
-    text.textContent = `${boatInfo.totalCapacity} / ${boatInfo.totalPop} pop`;
-    bar.style.width = boatInfo.percentage + '%';
-    
-    if (boatInfo.percentage >= 100) {
-        bar.style.background = 'linear-gradient(90deg, #4CAF50, #8BC34A)';
-        warning.style.display = 'none';
-    } else if (boatInfo.percentage >= 50) {
-        bar.style.background = 'linear-gradient(90deg, #FF9800, #FFC107)';
-        warning.style.display = 'block';
-        warning.textContent = `Manque ${boatInfo.neededCapacity} places!`;
-    } else {
-        bar.style.background = 'linear-gradient(90deg, #F44336, #E53935)';
-        warning.style.display = 'block';
-        warning.textContent = `Ajoutez des bateaux! (${boatInfo.neededCapacity} places manquantes)`;
-    }
-    
-    researchInfo.textContent = hasBoatResearch 
-        ? `Extension navale: GTrans=${boatInfo.bigBoatCap} pop, PTrans=${boatInfo.smallBoatCap} pop`
-        : `Sans extension: GTrans=${boatInfo.bigBoatCap} pop, PTrans=${boatInfo.smallBoatCap} pop`;
-}
-
-function updateTravelInfo() {
-    const travelInfo = document.getElementById('calage-travel-info');
-    const travelTimeEl = document.getElementById('calage-travel-time');
-    const sendTimeEl = document.getElementById('calage-send-time');
-    const statusEl = document.getElementById('calage-travel-status');
-    
-    if (!travelInfo) return;
-    
-    const cibleId = parseInt(document.getElementById('calage-ville-cible')?.value);
-    const heureArrivee = document.getElementById('calage-heure-arrivee')?.value;
-    const units = getSelectedUnits();
-    
-    if (!cibleId || Object.keys(units).length === 0) {
-        travelInfo.style.display = 'none';
-        return;
-    }
-    
-    travelInfo.style.display = 'block';
-    travelTimeEl.textContent = 'Calcul...';
-    sendTimeEl.textContent = '--:--:--';
-    statusEl.textContent = 'Calcul du temps de trajet...';
-    
-    calculerTempsTrajetAuto(cibleId, units, function(travelTimeMs) {
-        if (travelTimeMs) {
-            travelTimeEl.textContent = formatDuration(travelTimeMs);
-            statusEl.textContent = 'Temps calcule depuis serveur';
-            statusEl.style.color = '#4CAF50';
-            
-            if (heureArrivee) {
-                const arrivalMs = getTimeInMs(heureArrivee);
-                const sendMs = arrivalMs - travelTimeMs;
-                sendTimeEl.textContent = formatTime(sendMs);
-            }
-        } else {
-            travelTimeEl.textContent = 'Erreur';
-            statusEl.textContent = 'Impossible de calculer';
-            statusEl.style.color = '#E53935';
-        }
-    });
-}
-
-let calculationTimeout = null;
-let lastCalculation = { sourceId: null, cibleId: null, units: null, result: null };
-
-function calculerTempsTrajetAuto(cibleId, units, callback) {
-    const sourceId = parseInt(document.getElementById('calage-ville-source')?.value) || uw.Game.townId;
-    const typeAttaque = document.getElementById('calage-type-attaque')?.value || 'attack';
-    
-    const unitsKey = JSON.stringify(units);
-    if (lastCalculation.sourceId === sourceId && 
-        lastCalculation.cibleId === cibleId && 
-        lastCalculation.units === unitsKey &&
-        lastCalculation.result) {
-        callback(lastCalculation.result);
-        return;
-    }
-    
-    if (calculationTimeout) {
-        clearTimeout(calculationTimeout);
-    }
-    
-    calculationTimeout = setTimeout(function() {
-        const townId = sourceId;
-        const csrfToken = uw.Game.csrfToken;
-        const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
-
-        const jsonData = {
-            id: cibleId,
-            type: typeAttaque,
-            town_id: townId,
-            nl_init: true
-        };
-
-        for (const unitId in units) {
-            if (units.hasOwnProperty(unitId)) {
-                jsonData[unitId] = units[unitId];
-            }
-        }
-
-        uw.$.ajax({
-            url: url,
-            type: 'POST',
-            data: { json: JSON.stringify(jsonData) },
-            dataType: 'json',
-            success: function(response) {
-                if (response.json && response.json.error) {
-                    log('CALAGE', 'Trajet impossible: ' + response.json.error, 'error');
-                    callback(null);
-                    return;
-                }
-                
-                const notifs = response.json && response.json.notifications;
-                if (!notifs) {
-                    log('CALAGE', 'Trajet impossible: pas de reponse serveur', 'error');
-                    callback(null);
-                    return;
-                }
-
-                let mvIndex = -1;
-                for (let i = 0; i < notifs.length; i++) {
-                    if (notifs[i].subject === 'MovementsUnits') {
-                        mvIndex = i;
-                        break;
-                    }
-                }
-
-                if (mvIndex === -1) {
-                    log('CALAGE', 'Trajet impossible: mouvement non cree', 'error');
-                    callback(null);
-                    return;
-                }
-
-                try {
-                    const paramStr = notifs[mvIndex].param_str;
-                    const movementData = JSON.parse(paramStr).MovementsUnits;
-                    const arrivalAt = movementData.arrival_at;
-                    const commandId = movementData.command_id;
-                    
-                    const now = Math.floor(Date.now() / 1000);
-                    const travelTimeSec = arrivalAt - now;
-                    const travelTimeMs = travelTimeSec * 1000;
-                    
-                    lastCalculation = {
-                        sourceId: sourceId,
-                        cibleId: cibleId,
-                        units: unitsKey,
-                        result: travelTimeMs
-                    };
-                    
-                    annulerCommande(commandId).then(function() {
-                        callback(travelTimeMs);
-                    }).catch(function() {
-                        callback(travelTimeMs);
-                    });
-                    
-                } catch (e) {
-                    callback(null);
-                }
-            },
-            error: function() {
-                callback(null);
-            }
-        });
-    }, 500);
-}
-
-function getSelectedUnits() {
-    const units = {};
-    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
-        const unitId = inp.getAttribute('data-unit');
-        const count = parseInt(inp.value) || 0;
-        if (count > 0) {
-            units[unitId] = count;
-        }
-    });
-    return units;
-}
-
-function ajouterAttaque() {
-    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
-    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
-    const heureArrivee = document.getElementById('calage-heure-arrivee').value;
-    const typeAttaque = document.getElementById('calage-type-attaque').value;
-    const toleranceMoins = document.getElementById('calage-tolerance-moins').checked;
-    const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
-
-    if (!cibleId || !heureArrivee) {
-        log('CALAGE', 'Remplir cible et heure d\'arrivee!', 'error');
-        return;
-    }
-
-    const unites = getSelectedUnits();
-    let totalUnites = Object.values(unites).reduce((a, b) => a + b, 0);
-
-    if (totalUnites === 0) {
-        log('CALAGE', 'Selectionner au moins une unite!', 'error');
-        return;
-    }
-
-    if (hasGroundUnits(unites) && !hasBoatsSelected(unites)) {
-        log('CALAGE', 'Attention: troupes terrestres sans bateaux!', 'warning');
-    }
-
-    const travelTimeEl = document.getElementById('calage-travel-time');
-    const travelText = travelTimeEl?.textContent;
-    
-    if (!travelText || travelText === 'Calcul...' || travelText === '--:--') {
-        log('CALAGE', 'Attendez le calcul du temps de trajet...', 'warning');
-        return;
-    }
-    
-    if (travelText === 'Erreur') {
-        log('CALAGE', 'Trajet impossible! Verifiez la cible et les unites.', 'error');
-        return;
-    }
-    
-    const travelTimeMs = lastCalculation.result;
-    if (!travelTimeMs) {
-        log('CALAGE', 'Temps de trajet non disponible - trajet impossible?', 'error');
-        return;
-    }
-    
-    const heureArriveeMs = getTimeInMs(heureArrivee);
-    const heureEnvoiMs = heureArriveeMs - travelTimeMs;
-
-    const nouvelleAttaque = {
-        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-        sourceId: sourceId,
-        cibleId: cibleId,
-        heureArrivee: heureArrivee,
-        heureEnvoi: formatTime(heureEnvoiMs),
-        travelTime: travelTimeMs,
-        type: typeAttaque,
-        unites: unites,
-        toleranceMoins: toleranceMoins,
-        tolerancePlus: tolerancePlus,
-        status: 'attente',
-        tentatives: 0,
-        dateCreation: Date.now()
-    };
-
-    calageData.attaques.push(nouvelleAttaque);
-    saveData();
-    majListeAttaques();
-
-    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
-        inp.value = 0;
-    });
-    updateBoatIndicator();
-    updateTravelInfo();
-
-    log('CALAGE', `Attaque ajoutee: envoi ${nouvelleAttaque.heureEnvoi} -> arrivee ${heureArrivee}`, 'success');
-}
-
-function planifierAttaques() {
-    const count = parseInt(document.getElementById('calage-plan-count').value) || 1;
-    const interval = parseInt(document.getElementById('calage-plan-interval').value) || 1;
-    
-    const sourceId = parseInt(document.getElementById('calage-ville-source').value);
-    const cibleId = parseInt(document.getElementById('calage-ville-cible').value);
-    const heureArrivee = document.getElementById('calage-heure-arrivee').value;
-    const typeAttaque = document.getElementById('calage-type-attaque').value;
-    const toleranceMoins = document.getElementById('calage-tolerance-moins').checked;
-    const tolerancePlus = document.getElementById('calage-tolerance-plus').checked;
-    
-    if (!cibleId || !heureArrivee) {
-        log('CALAGE', 'Remplir cible et heure!', 'error');
-        return;
-    }
-    
-    const unites = getSelectedUnits();
-    let totalUnites = Object.values(unites).reduce((a, b) => a + b, 0);
-    
-    if (totalUnites === 0) {
-        log('CALAGE', 'Selectionner au moins une unite!', 'error');
-        return;
-    }
-    
-    if (hasGroundUnits(unites) && !hasBoatsSelected(unites)) {
-        log('CALAGE', 'Attention: troupes terrestres sans bateaux!', 'warning');
-    }
-    
-    const travelTimeMs = lastCalculation.result;
-    if (!travelTimeMs) {
-        log('CALAGE', 'Trajet impossible ou calcul en cours', 'error');
-        return;
-    }
-    
-    const [hours, minutes, seconds] = heureArrivee.split(':').map(Number);
-    let baseArrivalTime = new Date();
-    baseArrivalTime.setHours(hours, minutes, seconds || 0, 0);
-    
-    for (let i = 0; i < count; i++) {
-        const arrivalTime = new Date(baseArrivalTime.getTime() + (i * interval * 1000));
-        const arrivalStr = arrivalTime.toTimeString().split(' ')[0];
-        const sendTimeMs = arrivalTime.getTime() - travelTimeMs;
-        
-        const nouvelleAttaque = {
-            id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '_' + i,
-            sourceId: sourceId,
-            cibleId: cibleId,
-            heureArrivee: arrivalStr,
-            heureEnvoi: formatTime(sendTimeMs),
-            travelTime: travelTimeMs,
-            type: typeAttaque,
-            unites: { ...unites },
-            toleranceMoins: toleranceMoins,
-            tolerancePlus: tolerancePlus,
-            status: 'attente',
-            tentatives: 0,
-            dateCreation: Date.now()
-        };
-        
-        calageData.attaques.push(nouvelleAttaque);
-    }
-    
-    saveData();
-    majListeAttaques();
-    
-    document.querySelectorAll('#calage-ground-units input, #calage-naval-units input').forEach(inp => {
-        inp.value = 0;
-    });
-    updateBoatIndicator();
-    updateTravelInfo();
-    
-    log('CALAGE', `${count} attaques planifiees (intervalle ${interval}s)`, 'success');
-}
-
-function savePlan() {
-    const nameInput = document.getElementById('calage-plan-name');
-    const planName = nameInput.value.trim();
-    
-    if (!planName) {
-        log('CALAGE', 'Entrez un nom de plan', 'warning');
-        return;
-    }
-    
-    if (calageData.attaques.length === 0) {
-        log('CALAGE', 'Aucune attaque a sauvegarder', 'warning');
-        return;
-    }
-    
-    const sourceId = calageData.attaques[0].sourceId;
-    const cibleId = calageData.attaques[0].cibleId;
-    const sourceName = getVillesJoueur().find(v => v.id === sourceId)?.name || sourceId;
-    
-    const plan = {
-        name: planName,
-        date: new Date().toISOString(),
-        sourceId: sourceId,
-        sourceName: sourceName,
-        cibleId: cibleId,
-        attackCount: calageData.attaques.length,
-        attaques: calageData.attaques.map(a => ({ 
-            ...a, 
-            status: 'attente', 
-            tentatives: 0 
-        }))
-    };
-    
-    const existingIndex = calageData.plans.findIndex(p => p.name === planName);
-    if (existingIndex >= 0) {
-        calageData.plans[existingIndex] = plan;
-        log('CALAGE', `Plan "${planName}" mis a jour`, 'success');
-    } else {
-        calageData.plans.push(plan);
-        log('CALAGE', `Plan "${planName}" sauvegarde`, 'success');
-    }
-    
-    nameInput.value = '';
-    saveData();
-    updatePlansList();
-}
-
-function loadPlan(index) {
-    const plan = calageData.plans[index];
-    if (!plan) return;
-    
-    calageData.attaques = plan.attaques.map(a => ({ 
-        ...a, 
-        id: 'atk_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-        status: 'attente', 
-        tentatives: 0 
-    }));
-    
-    saveData();
-    majListeAttaques();
-    log('CALAGE', `Plan "${plan.name}" charge (${plan.attaques.length} attaques)`, 'success');
-}
-
-function deletePlan(index) {
-    const plan = calageData.plans[index];
-    if (!plan) return;
-    
-    calageData.plans.splice(index, 1);
-    saveData();
-    updatePlansList();
-    log('CALAGE', `Plan "${plan.name}" supprime`, 'info');
-}
-
-function updatePlansList() {
-    const container = document.getElementById('calage-plans-list');
-    if (!container) return;
-    
-    if (!calageData.plans.length) {
-        container.innerHTML = '<div style="text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun plan sauvegarde</div>';
-        return;
-    }
-    
-    container.innerHTML = calageData.plans.map((plan, i) => {
-        const date = new Date(plan.date).toLocaleDateString('fr-FR');
-        return `
-        <div class="plan-item">
-            <div class="plan-name">${plan.name}</div>
-            <div class="plan-meta">
-                ${plan.sourceName || plan.sourceId} -> ${plan.cibleId} | ${plan.attackCount || plan.attaques.length} attaques | ${date}
-            </div>
-            <div class="plan-actions">
-                <button class="plan-load-btn" data-index="${i}" style="background:#4CAF50;color:#fff;">Charger</button>
-                <button class="plan-delete-btn" data-index="${i}" style="background:#E53935;color:#fff;">Supprimer</button>
-            </div>
-        </div>
-    `}).join('');
-    
-    container.querySelectorAll('.plan-load-btn').forEach(b => {
-        b.onclick = () => loadPlan(parseInt(b.dataset.index));
-    });
-    container.querySelectorAll('.plan-delete-btn').forEach(b => {
-        b.onclick = () => deletePlan(parseInt(b.dataset.index));
-    });
-}
-
-function exportPlans() {
-    const exportData = {
-        version: '2.2.0',
-        exportDate: new Date().toISOString(),
-        plans: calageData.plans,
-        attaques: calageData.attaques
-    };
-    
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'grepolis-calage-plans-' + new Date().toISOString().split('T')[0] + '.json';
-    a.click();
-    URL.revokeObjectURL(url);
-    
-    log('CALAGE', 'Plans exportes', 'success');
-}
-
-function importPlans(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        try {
-            const importData = JSON.parse(e.target.result);
-            
-            if (importData.plans && Array.isArray(importData.plans)) {
-                let imported = 0;
-                importData.plans.forEach(plan => {
-                    if (plan.name) {
-                        const existingIndex = calageData.plans.findIndex(p => p.name === plan.name);
-                        if (existingIndex >= 0) {
-                            calageData.plans[existingIndex] = plan;
-                        } else {
-                            calageData.plans.push(plan);
-                        }
-                        imported++;
-                    }
-                });
-                
-                log('CALAGE', `${imported} plan(s) importe(s)`, 'success');
-            }
-            
-            saveData();
-            updatePlansList();
-            majListeAttaques();
-        } catch(err) {
-            log('CALAGE', 'Erreur import: ' + err.message, 'error');
-        }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
-}
-
-function majListeAttaques() {
-    const liste = document.getElementById('calage-liste-attaques');
-    const count = document.getElementById('calage-count');
-    if (!liste) return;
-
-    count.textContent = calageData.attaques.length;
-
-    if (calageData.attaques.length === 0) {
-        liste.innerHTML = '<div style="text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune attaque planifiee</div>';
-        return;
-    }
-
-    liste.innerHTML = '';
-
-    calageData.attaques.forEach(function(atk, index) {
-        let statusClass = 'status-attente';
-        let statusText = 'Attente';
-        let itemClass = '';
-
-        if (atk.status === 'encours') {
-            statusClass = 'status-encours';
-            statusText = 'En cours (' + (atk.tentatives || 0) + ')';
-            itemClass = 'en-cours';
-        } else if (atk.status === 'succes') {
-            statusClass = 'status-succes';
-            statusText = 'Succes';
-            itemClass = 'terminee';
-        }
-
-        const unitsList = [];
-        for (const u in atk.unites) {
-            if (atk.unites.hasOwnProperty(u) && atk.unites[u] > 0) {
-                unitsList.push(u + ':' + atk.unites[u]);
-            }
-        }
-
-        const div = document.createElement('div');
-        div.className = 'attaque-item ' + itemClass;
-        div.innerHTML = `
-            <div class="attaque-header">
-                <div class="attaque-info">
-                    <div class="nom">${atk.sourceId} -> ${atk.cibleId}</div>
-                    <div class="details">${atk.type} | ${unitsList.slice(0, 3).join(', ')}${unitsList.length > 3 ? '...' : ''}</div>
-                </div>
-                <span class="attaque-status ${statusClass}">${statusText}</span>
-            </div>
-            <div class="attaque-times">
-                <span>Envoi: <span class="send">${atk.heureEnvoi || '??:??:??'}</span></span>
-                <span>Arrivee: <span class="arrival">${atk.heureArrivee}</span></span>
-                <span>Trajet: ${atk.travelTime ? formatDuration(atk.travelTime) : '??'}</span>
-            </div>
-            <div class="calage-actions">
-                <button class="btn-lancer" data-index="${index}">Lancer</button>
-                <button class="btn-suppr" data-index="${index}">Supprimer</button>
-            </div>
-        `;
-        liste.appendChild(div);
-    });
-
-    liste.querySelectorAll('.btn-suppr').forEach(function(btn) {
-        btn.onclick = function() {
-            const idx = parseInt(this.getAttribute('data-index'));
-            supprimerAttaque(idx);
-        };
-    });
-
-    liste.querySelectorAll('.btn-lancer').forEach(function(btn) {
-        btn.onclick = function() {
-            const idx = parseInt(this.getAttribute('data-index'));
-            lancerAttaqueMaintenant(idx);
-        };
-    });
-}
-
-function supprimerAttaque(index) {
-    calageData.attaques.splice(index, 1);
-    saveData();
-    majListeAttaques();
-    log('CALAGE', 'Attaque supprimee', 'info');
-}
-
-function supprimerToutesAttaques() {
-    if (calageData.attaques.length === 0) return;
-    calageData.attaques = [];
-    saveData();
-    majListeAttaques();
-    log('CALAGE', 'Toutes les attaques supprimees', 'info');
-}
-
-function lancerAttaqueMaintenant(index) {
-    const atk = calageData.attaques[index];
-    if (!atk) return;
-
-    if (calageData.attaqueEnCours) {
-        log('CALAGE', 'Une attaque est deja en cours!', 'error');
-        return;
-    }
-
-    log('CALAGE', 'Lancement manuel: ' + atk.sourceId + ' -> ' + atk.cibleId, 'info');
-    lancerAttaque(atk);
-}
-
 function verifierEtLancerAttaque() {
     if (calageData.attaqueEnCours) {
         return;
@@ -1549,6 +1288,7 @@ function verifierEtLancerAttaque() {
 
     const maintenant = Date.now();
     let attaqueALancer = null;
+    let planDeLAttaque = null;
     
     const doLog = (maintenant - dernierLogCheck) >= 10000;
     if (doLog) {
@@ -1556,120 +1296,152 @@ function verifierEtLancerAttaque() {
         console.log('[CALAGE] [CHECK] Verification des attaques a', formatTime(maintenant));
     }
 
-    for (let i = 0; i < calageData.attaques.length; i++) {
-        const atk = calageData.attaques[i];
+    for (let p = 0; p < calageData.plans.length; p++) {
+        const plan = calageData.plans[p];
+        
+        for (let i = 0; i < plan.attaques.length; i++) {
+            const atk = plan.attaques[i];
 
-        if (atk.status !== 'attente') continue;
-        
-        const heureArriveeMs = getTimeInMs(atk.heureArrivee);
-        let tempsAvantArrivee = heureArriveeMs - maintenant;
-        
-        if (tempsAvantArrivee < -60000) {
-            tempsAvantArrivee += 24 * 60 * 60 * 1000;
-        }
-        
-        const notifKey = 'atk_' + atk.id;
-        
-        if (!atk.travelTime && !calculEnCours[atk.id]) {
-            if (tempsAvantArrivee > 0 && tempsAvantArrivee < 2 * 60 * 60 * 1000) {
-                console.log('[CALAGE] [CHECK] Calcul du temps de trajet necessaire pour:', atk.sourceId, '->', atk.cibleId);
-                calculEnCours[atk.id] = true;
-                
-                calculerTempsTrajetPourAttaque(atk).then(function(tempsTrajetMs) {
-                    if (tempsTrajetMs) {
-                        atk.travelTime = tempsTrajetMs;
-                        const heureEnvoiMs = heureArriveeMs - tempsTrajetMs;
-                        atk.heureEnvoi = formatTime(heureEnvoiMs);
-                        saveData();
-                        majListeAttaques();
-                        
-                        console.log('[CALAGE] [CALCUL] Temps de trajet sauvegarde:', Math.round(tempsTrajetMs/1000), 's');
-                        console.log('[CALAGE] [CALCUL] Heure de depart calculee:', atk.heureEnvoi);
-                        
-                        afficherNotification(
-                            'Temps de trajet calcule',
-                            atk.sourceId + ' -> ' + atk.cibleId + ': ' + formatDuration(tempsTrajetMs) + ' | Depart: ' + atk.heureEnvoi,
-                            'info'
-                        );
-                    }
-                    delete calculEnCours[atk.id];
-                }).catch(function(err) {
-                    console.error('[CALAGE] [CALCUL] Erreur calcul temps trajet:', err);
-                    delete calculEnCours[atk.id];
-                });
+            if (atk.status !== 'attente') continue;
+            
+            const heureArriveeMs = getTimeInMs(atk.heureArrivee);
+            let tempsAvantArrivee = heureArriveeMs - maintenant;
+            
+            if (tempsAvantArrivee < -60000) {
+                tempsAvantArrivee += 24 * 60 * 60 * 1000;
             }
-            continue;
-        }
-        
-        if (!atk.heureEnvoi || !atk.travelTime) continue;
-        
-        let heureEnvoiMs = getTimeInMs(atk.heureEnvoi);
-        let tempsAvantDepart = heureEnvoiMs - maintenant;
-        
-        if (tempsAvantDepart < -60000) {
-            tempsAvantDepart += 24 * 60 * 60 * 1000;
-        }
-        
-        const minDepart = Math.floor(tempsAvantDepart / 60000);
-        const secDepart = Math.floor((tempsAvantDepart % 60000) / 1000);
-        
-        if (doLog && tempsAvantDepart > 0 && tempsAvantDepart < 2 * 60 * 60 * 1000) {
-            console.log('[CALAGE] [CHECK] Attaque:', atk.sourceId, '->', atk.cibleId);
-            console.log('[CALAGE] [CHECK]   Heure ARRIVEE souhaitee:', atk.heureArrivee);
-            console.log('[CALAGE] [CHECK]   Heure DEPART calculee:', atk.heureEnvoi);
-            console.log('[CALAGE] [CHECK]   Temps de trajet:', formatDuration(atk.travelTime));
-            console.log('[CALAGE] [CHECK]   Temps avant DEPART:', minDepart + 'm ' + secDepart + 's');
-        }
-        
-        if (tempsAvantDepart > 0 && tempsAvantDepart < 120000) {
-            majStatus('Envoi dans ' + minDepart + 'm ' + secDepart + 's (arr: ' + atk.heureArrivee + ')');
-        }
-        
-        const alertes = [
-            { temps: 60, msg: '1 heure' },
-            { temps: 30, msg: '30 minutes' },
-            { temps: 15, msg: '15 minutes' },
-            { temps: 10, msg: '10 minutes' },
-            { temps: 5, msg: '5 minutes' }
-        ];
-        
-        for (let j = 0; j < alertes.length; j++) {
-            const alerte = alertes[j];
-            const key = notifKey + '_' + alerte.temps;
-            if (minDepart === alerte.temps && !dernieresNotifs[key]) {
-                dernieresNotifs[key] = true;
-                console.log('[CALAGE] [NOTIF] Alerte:', alerte.msg, 'avant le depart', atk.sourceId, '->', atk.cibleId);
-                afficherNotification(
-                    'Depart dans ' + alerte.msg,
-                    atk.sourceId + ' -> ' + atk.cibleId + ' | Arrivee ' + atk.heureArrivee,
-                    'warning'
-                );
+            
+            const notifKey = 'atk_' + atk.id;
+            
+            if (!atk.travelTime && !calculEnCours[atk.id]) {
+                if (tempsAvantArrivee > 0 && tempsAvantArrivee < 2 * 60 * 60 * 1000) {
+                    console.log('[CALAGE] [CHECK] Calcul du temps de trajet necessaire pour:', atk.sourceId, '->', plan.cibleId);
+                    calculEnCours[atk.id] = true;
+                    
+                    const atkForCalc = {
+                        sourceId: atk.sourceId,
+                        cibleId: plan.cibleId,
+                        type: plan.type,
+                        unites: atk.unites
+                    };
+                    
+                    calculerTempsTrajetPourAttaque(atkForCalc).then(function(tempsTrajetMs) {
+                        if (tempsTrajetMs) {
+                            atk.travelTime = tempsTrajetMs;
+                            const heureEnvoiMs = heureArriveeMs - tempsTrajetMs;
+                            atk.heureEnvoi = formatTime(heureEnvoiMs);
+                            saveData();
+                            if (planEnEdition !== null) majAttaquesPlan();
+                            
+                            console.log('[CALAGE] [CALCUL] Temps de trajet sauvegarde:', Math.round(tempsTrajetMs/1000), 's');
+                            console.log('[CALAGE] [CALCUL] Heure de depart calculee:', atk.heureEnvoi);
+                            
+                            afficherNotification(
+                                'Temps de trajet calcule',
+                                atk.sourceNom + ' -> ' + plan.cibleId + ': ' + formatDuration(tempsTrajetMs) + ' | Depart: ' + atk.heureEnvoi,
+                                'info'
+                            );
+                        }
+                        delete calculEnCours[atk.id];
+                    }).catch(function(err) {
+                        console.error('[CALAGE] [CALCUL] Erreur calcul temps trajet:', err);
+                        delete calculEnCours[atk.id];
+                    });
+                }
+                continue;
             }
-        }
+            
+            if (!atk.heureEnvoi || !atk.travelTime) continue;
+            
+            let heureEnvoiMs = getTimeInMs(atk.heureEnvoi);
+            let tempsAvantDepart = heureEnvoiMs - maintenant;
+            
+            if (tempsAvantDepart < -60000) {
+                tempsAvantDepart += 24 * 60 * 60 * 1000;
+            }
+            
+            const minDepart = Math.floor(tempsAvantDepart / 60000);
+            const secDepart = Math.floor((tempsAvantDepart % 60000) / 1000);
+            
+            if (doLog && tempsAvantDepart > 0 && tempsAvantDepart < 2 * 60 * 60 * 1000) {
+                console.log('[CALAGE] [CHECK] Attaque:', atk.sourceId, '->', plan.cibleId);
+                console.log('[CALAGE] [CHECK]   Heure ARRIVEE souhaitee:', atk.heureArrivee);
+                console.log('[CALAGE] [CHECK]   Heure DEPART calculee:', atk.heureEnvoi);
+                console.log('[CALAGE] [CHECK]   Temps de trajet:', formatDuration(atk.travelTime));
+                console.log('[CALAGE] [CHECK]   Temps avant DEPART:', minDepart + 'm ' + secDepart + 's');
+            }
+            
+            if (tempsAvantDepart > 0 && tempsAvantDepart < 120000) {
+                majStatus('Envoi dans ' + minDepart + 'm ' + secDepart + 's (arr: ' + atk.heureArrivee + ')');
+            }
+            
+            const alertes = [
+                { temps: 60, msg: '1 heure' },
+                { temps: 30, msg: '30 minutes' },
+                { temps: 15, msg: '15 minutes' },
+                { temps: 10, msg: '10 minutes' },
+                { temps: 5, msg: '5 minutes' }
+            ];
+            
+            for (let j = 0; j < alertes.length; j++) {
+                const alerte = alertes[j];
+                const key = notifKey + '_' + alerte.temps;
+                if (minDepart === alerte.temps && !dernieresNotifs[key]) {
+                    dernieresNotifs[key] = true;
+                    console.log('[CALAGE] [NOTIF] Alerte:', alerte.msg, 'avant le depart', atk.sourceId, '->', plan.cibleId);
+                    afficherNotification(
+                        'Depart dans ' + alerte.msg,
+                        atk.sourceNom + ' -> ' + plan.cibleId + ' | Arrivee ' + atk.heureArrivee,
+                        'warning'
+                    );
+                }
+            }
 
-        if (tempsAvantDepart > 0 && tempsAvantDepart < AVANCE_LANCEMENT) {
-            console.log('[CALAGE] [TRIGGER] Temps avant depart < 15s (' + tempsAvantDepart + 'ms) - Declenchement !');
-            attaqueALancer = atk;
-            break;
+            if (tempsAvantDepart > 0 && tempsAvantDepart < AVANCE_LANCEMENT) {
+                console.log('[CALAGE] [TRIGGER] Temps avant depart < 15s (' + tempsAvantDepart + 'ms) - Declenchement !');
+                attaqueALancer = atk;
+                planDeLAttaque = plan;
+                break;
+            }
         }
+        
+        if (attaqueALancer) break;
     }
     
-    if (attaqueALancer) {
+    if (attaqueALancer && planDeLAttaque) {
         console.log('[CALAGE] ========================================');
         console.log('[CALAGE] [LANCEMENT] Attaque trouvee a lancer !');
         console.log('[CALAGE] [LANCEMENT] Source:', attaqueALancer.sourceId);
-        console.log('[CALAGE] [LANCEMENT] Cible:', attaqueALancer.cibleId);
+        console.log('[CALAGE] [LANCEMENT] Cible:', planDeLAttaque.cibleId);
         console.log('[CALAGE] [LANCEMENT] Heure depart:', attaqueALancer.heureEnvoi);
         console.log('[CALAGE] [LANCEMENT] Heure arrivee:', attaqueALancer.heureArrivee);
         console.log('[CALAGE] ========================================');
         
         afficherNotification(
             'Calage automatique',
-            attaqueALancer.sourceId + ' -> ' + attaqueALancer.cibleId + ' - Lancement !',
+            attaqueALancer.sourceNom + ' -> ' + planDeLAttaque.cibleId + ' - Lancement !',
             'attack'
         );
         
-        lancerAttaque(attaqueALancer);
+        const atkComplete = {
+            id: attaqueALancer.id,
+            sourceId: attaqueALancer.sourceId,
+            sourceNom: attaqueALancer.sourceNom,
+            cibleId: planDeLAttaque.cibleId,
+            type: planDeLAttaque.type,
+            heureArrivee: attaqueALancer.heureArrivee,
+            heureEnvoi: attaqueALancer.heureEnvoi,
+            travelTime: attaqueALancer.travelTime,
+            unites: attaqueALancer.unites,
+            toleranceMoins: planDeLAttaque.toleranceMoins || 0,
+            tolerancePlus: planDeLAttaque.tolerancePlus || 0,
+            status: attaqueALancer.status,
+            tentatives: attaqueALancer.tentatives || 0,
+            _planIndex: calageData.plans.indexOf(planDeLAttaque),
+            _atkIndex: planDeLAttaque.attaques.indexOf(attaqueALancer)
+        };
+        
+        lancerAttaque(atkComplete);
     }
 }
 
@@ -1763,8 +1535,17 @@ function lancerAttaque(atk) {
     calageData.attaqueEnCours = atk;
     atk.status = 'encours';
     atk.tentatives = 1;
+    
+    if (atk._planIndex !== undefined && atk._atkIndex !== undefined) {
+        const planAtk = calageData.plans[atk._planIndex]?.attaques[atk._atkIndex];
+        if (planAtk) {
+            planAtk.status = 'encours';
+            planAtk.tentatives = 1;
+        }
+    }
+    
     saveData();
-    majListeAttaques();
+    if (planEnEdition !== null) majAttaquesPlan();
     majStatus('Envoi vers ' + atk.cibleId + '...');
     
     console.log('[CALAGE] [ATTAQUE] === LANCEMENT ATTAQUE ===');
@@ -1925,19 +1706,28 @@ function traiterReponseAttaque(response, atk) {
             
             log('CALAGE', 'SUCCES! Arrivee: ' + formatTime(arrivalMs) + ' (' + atk.tentatives + ' essais)', 'success');
             atk.status = 'succes';
+            
+            if (atk._planIndex !== undefined && atk._atkIndex !== undefined) {
+                const planAtk = calageData.plans[atk._planIndex]?.attaques[atk._atkIndex];
+                if (planAtk) {
+                    planAtk.status = 'succes';
+                    planAtk.tentatives = atk.tentatives;
+                }
+            }
+            
             saveData();
-            majListeAttaques();
+            if (planEnEdition !== null) majAttaquesPlan();
             majStatus('SUCCES! ' + formatTime(arrivalMs));
             calageData.attaqueEnCours = null;
             
             afficherNotification(
                 'Calage reussi !',
-                atk.sourceId + ' -> ' + atk.cibleId + ' | Arrivee: ' + formatTime(arrivalMs) + ' (' + atk.tentatives + ' essais)',
+                (atk.sourceNom || atk.sourceId) + ' -> ' + atk.cibleId + ' | Arrivee: ' + formatTime(arrivalMs) + ' (' + atk.tentatives + ' essais)',
                 'success'
             );
 
             sendWebhook('Calage Reussi!', 
-                `**${atk.sourceId} -> ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
+                `**${atk.sourceNom || atk.sourceId} -> ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
             return;
         }
 
@@ -1948,8 +1738,16 @@ function traiterReponseAttaque(response, atk) {
         annulerCommande(commandId).then(function() {
             console.log('[CALAGE] [ANNULATION] Commande annulee avec succes');
             atk.tentatives++;
+            
+            if (atk._planIndex !== undefined && atk._atkIndex !== undefined) {
+                const planAtk = calageData.plans[atk._planIndex]?.attaques[atk._atkIndex];
+                if (planAtk) {
+                    planAtk.tentatives = atk.tentatives;
+                }
+            }
+            
             saveData();
-            majListeAttaques();
+            if (planEnEdition !== null) majAttaquesPlan();
 
             console.log('[CALAGE] [ATTENTE] Attente retour des troupes...');
             majStatus('Attente troupes... (#' + atk.tentatives + ')');
