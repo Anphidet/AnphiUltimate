@@ -345,7 +345,10 @@ module.render = function(container) {
                 </div>
                 
                 <div class="calage-section">
-                    <h3>📋 Attaques du plan (<span id="calage-edit-attaques-count">0</span>)</h3>
+                    <h3 style="display:flex;justify-content:space-between;align-items:center;">
+                        <span>📋 Attaques du plan (<span id="calage-edit-attaques-count">0</span>)</span>
+                        <button class="calage-btn calage-btn-primary calage-btn-sm" id="calage-btn-calc-all" style="font-size:10px;">⏱️ Calculer tous</button>
+                    </h3>
                     <div id="calage-edit-attaques-liste"></div>
                 </div>
                 
@@ -605,6 +608,9 @@ module.render = function(container) {
             .calage-status-attente { background: #6c757d; color: white; }
             .calage-status-encours { background: #ffc107; color: black; }
             .calage-status-succes { background: #4CAF50; color: white; }
+            .calage-status-echec { background: #E53935; color: white; }
+            
+            .calage-attaque-item.echec { border-color: #E53935; background: rgba(229,57,53,0.1); }
             
             .calage-empty {
                 text-align: center;
@@ -746,8 +752,20 @@ module.init = function() {
     const btnSauver = document.getElementById('calage-btn-sauver-plan');
     if (btnSauver) btnSauver.onclick = sauvegarderPlanEdite;
 
+    const btnCalcAll = document.getElementById('calage-btn-calc-all');
+    if (btnCalcAll) btnCalcAll.onclick = calculerTousTempsTrajet;
+
     const btnToggleBot = document.getElementById('calage-btn-toggle-bot');
-    if (btnToggleBot) btnToggleBot.onclick = function() { toggleBot(!calageData.botActif); };
+    if (btnToggleBot) btnToggleBot.onclick = function() { 
+        if (planEnEdition !== null) {
+            const plan = calageData.plans[planEnEdition];
+            if (plan) {
+                togglePlan(plan.id);
+            }
+        } else {
+            toggleBot(!calageData.botActif); 
+        }
+    };
 
     const editSource = document.getElementById('calage-edit-source');
     if (editSource) editSource.onchange = majUnitsEdition;
@@ -795,6 +813,7 @@ function changerVue(vue) {
         document.getElementById('calage-tab-edition').style.display = 'none';
         planEnEdition = null;
         majListePlans();
+        updateBotButton();
     }
 }
 
@@ -966,6 +985,7 @@ function editerPlan(index) {
 
     majUnitsEdition();
     majAttaquesPlan();
+    updateBotButton();
 
     changerVue('edition');
 }
@@ -1155,9 +1175,14 @@ function majAttaquesPlan() {
             return u + ':' + atk.unites[u]; 
         }).join(', ');
 
-        const statusClass = atk.status === 'succes' ? 'succes' : (atk.status === 'encours' ? 'encours' : '');
-        const statusLabel = atk.status === 'succes' ? 'Succes' : (atk.status === 'encours' ? 'En cours' : 'En attente');
-        const statusBadgeClass = atk.status === 'succes' ? 'calage-status-succes' : (atk.status === 'encours' ? 'calage-status-encours' : 'calage-status-attente');
+        const statusClass = atk.status === 'succes' ? 'succes' : (atk.status === 'echec' ? 'echec' : (atk.status === 'encours' ? 'encours' : ''));
+        const statusLabel = atk.status === 'succes' ? 'Succes' : (atk.status === 'echec' ? 'Echec' : (atk.status === 'encours' ? 'En cours' : 'En attente'));
+        const statusBadgeClass = atk.status === 'succes' ? 'calage-status-succes' : (atk.status === 'echec' ? 'calage-status-echec' : (atk.status === 'encours' ? 'calage-status-encours' : 'calage-status-attente'));
+
+        const travelTimeStr = atk.travelTime ? formatDuration(atk.travelTime) : '--';
+        const heureEnvoiStr = atk.heureEnvoi || '--:--:--';
+        const hasCalc = atk.travelTime ? true : false;
+        const isCalculating = calculEnCours[atk.id] === true;
 
         const div = document.createElement('div');
         div.className = 'calage-attaque-item ' + statusClass;
@@ -1165,12 +1190,20 @@ function majAttaquesPlan() {
             '<div class="calage-attaque-ville">' +
                 '<div class="calage-attaque-ville-name">' + atk.sourceNom + '</div>' +
                 '<div class="calage-attaque-ville-units">' + unitsList + '</div>' +
+                '<div class="calage-attaque-trajet" style="font-size:10px;margin-top:4px;color:' + (hasCalc ? '#4CAF50' : '#FF9800') + ';">' +
+                    '⏱️ Trajet: ' + travelTimeStr + ' | 🚀 Depart: ' + heureEnvoiStr +
+                    (isCalculating ? ' <span style="color:#64B5F6;">(calcul...)</span>' : '') +
+                '</div>' +
             '</div>' +
             '<div class="calage-attaque-heure">' +
                 atk.heureArrivee +
                 '<small>Arrivee</small>' +
             '</div>' +
-            '<span class="calage-attaque-status ' + statusBadgeClass + '">' + statusLabel + '</span>' +
+            '<div style="display:flex;flex-direction:column;gap:4px;align-items:center;">' +
+                '<span class="calage-attaque-status ' + statusBadgeClass + '">' + statusLabel + '</span>' +
+                (atk.status === 'attente' && !hasCalc && !isCalculating ? 
+                    '<button class="calage-btn calage-btn-primary calage-btn-sm btn-calc-trajet" data-idx="' + idx + '" style="font-size:9px;padding:3px 6px;">⏱️ Calculer</button>' : '') +
+            '</div>' +
             '<button class="calage-btn calage-btn-danger calage-btn-sm btn-suppr-atk" data-idx="' + idx + '">🗑️</button>';
         container.appendChild(div);
     });
@@ -1184,6 +1217,107 @@ function majAttaquesPlan() {
             afficherNotification('Attaque supprimee', '', 'info');
         });
     });
+
+    container.querySelectorAll('.btn-calc-trajet').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const idx = parseInt(this.getAttribute('data-idx'));
+            calculerTempsTrajetAttaque(idx);
+        });
+    });
+}
+
+function calculerTempsTrajetAttaque(idx) {
+    if (planEnEdition === null) return;
+    
+    const plan = calageData.plans[planEnEdition];
+    if (!plan || !plan.attaques[idx]) return;
+    
+    const atk = plan.attaques[idx];
+    
+    if (calculEnCours[atk.id]) {
+        log('CALAGE', 'Calcul deja en cours pour cette attaque', 'warning');
+        return;
+    }
+    
+    calculEnCours[atk.id] = true;
+    log('CALAGE', 'Calcul temps trajet: ' + atk.sourceId + ' -> ' + plan.cibleId, 'info');
+    majAttaquesPlan();
+    
+    const atkForCalc = {
+        sourceId: atk.sourceId,
+        cibleId: plan.cibleId,
+        type: plan.type,
+        unites: atk.unites
+    };
+    
+    calculerTempsTrajetPourAttaque(atkForCalc).then(function(tempsTrajetMs) {
+        if (tempsTrajetMs) {
+            atk.travelTime = tempsTrajetMs;
+            const heureArriveeMs = getTimeInMs(atk.heureArrivee);
+            const heureEnvoiMs = heureArriveeMs - tempsTrajetMs;
+            atk.heureEnvoi = formatTime(heureEnvoiMs);
+            saveData();
+            
+            log('CALAGE', 'Temps trajet: ' + formatDuration(tempsTrajetMs) + ' | Depart: ' + atk.heureEnvoi, 'success');
+            afficherNotification(
+                'Temps de trajet calcule',
+                atk.sourceNom + ' -> ' + plan.cibleId + ': ' + formatDuration(tempsTrajetMs),
+                'info'
+            );
+        }
+        delete calculEnCours[atk.id];
+        majAttaquesPlan();
+    }).catch(function(err) {
+        const errMsg = err && err.message ? err.message : String(err);
+        log('CALAGE', 'ERREUR calcul temps trajet: ' + errMsg, 'error');
+        delete calculEnCours[atk.id];
+        majAttaquesPlan();
+    });
+}
+
+function calculerTousTempsTrajet() {
+    if (planEnEdition === null) return;
+    
+    const plan = calageData.plans[planEnEdition];
+    if (!plan || plan.attaques.length === 0) {
+        log('CALAGE', 'Aucune attaque a calculer', 'warning');
+        return;
+    }
+    
+    let toCalculate = [];
+    plan.attaques.forEach(function(atk, idx) {
+        if (!atk.travelTime && !calculEnCours[atk.id] && atk.status === 'attente') {
+            toCalculate.push(idx);
+        }
+    });
+    
+    if (toCalculate.length === 0) {
+        log('CALAGE', 'Tous les temps de trajet sont deja calcules', 'info');
+        afficherNotification('Info', 'Tous les temps de trajet sont deja calcules', 'info');
+        return;
+    }
+    
+    log('CALAGE', 'Calcul de ' + toCalculate.length + ' temps de trajet...', 'info');
+    afficherNotification('Calcul en cours', toCalculate.length + ' attaque(s) a calculer', 'info');
+    
+    let currentIndex = 0;
+    
+    function calculerProchain() {
+        if (currentIndex >= toCalculate.length) {
+            log('CALAGE', 'Tous les calculs termines', 'success');
+            afficherNotification('Calculs termines', toCalculate.length + ' temps de trajet calcules', 'success');
+            return;
+        }
+        
+        const idx = toCalculate[currentIndex];
+        currentIndex++;
+        
+        calculerTempsTrajetAttaque(idx);
+        
+        setTimeout(calculerProchain, 3000);
+    }
+    
+    calculerProchain();
 }
 
 function sauvegarderPlanEdite() {
@@ -1209,6 +1343,31 @@ function updateBotButton() {
     let plansActifsCount = 0;
     for (let planId in calageData.plansActifs) {
         if (calageData.plansActifs[planId]) plansActifsCount++;
+    }
+    
+    if (planEnEdition !== null) {
+        const plan = calageData.plans[planEnEdition];
+        if (plan) {
+            const planActif = calageData.plansActifs[plan.id] === true;
+            if (planActif) {
+                if (btn) {
+                    btn.textContent = '⏹️ Arreter ce plan';
+                    btn.className = 'calage-btn calage-btn-danger calage-btn-sm';
+                }
+                if (status) {
+                    status.textContent = 'Status: Plan "' + plan.nom + '" actif';
+                }
+            } else {
+                if (btn) {
+                    btn.textContent = '▶️ Demarrer ce plan';
+                    btn.className = 'calage-btn calage-btn-success calage-btn-sm';
+                }
+                if (status) {
+                    status.textContent = 'Status: Plan "' + plan.nom + '" en attente';
+                }
+            }
+            return;
+        }
     }
     
     if (calageData.botActif || plansActifsCount > 0) {
