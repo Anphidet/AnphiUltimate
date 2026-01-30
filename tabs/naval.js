@@ -856,9 +856,23 @@ function runTargetMode(townId) {
         return;
     }
     
+    const docksLevel = getDocksLevelForTown(cityId);
+    if (docksLevel < 1) {
+        log('NAVAL', `[${cityName}] Port non construit ou niveau insuffisant`, 'warning');
+        return;
+    }
+    
+    const buildQueueSlots = getBuildQueueSlots(cityId);
+    if (buildQueueSlots <= 0) {
+        log('NAVAL', `[${cityName}] File de construction du port pleine`, 'info');
+        return;
+    }
+    
     const globalUnits = getGlobalUnitsForTown(cityId);
     const unitsInQueue = getUnitsInQueueForTown(cityId);
     let recruited = false;
+    
+    log('NAVAL', `[${cityName}] Port niv.${docksLevel}, slots dispo: ${buildQueueSlots}, Ressources: ${res.wood}/${res.stone}/${res.iron}`, 'info');
     
     for (const unitId in targets) {
         const targetCount = targets[unitId];
@@ -870,26 +884,116 @@ function runTargetMode(townId) {
         if (needed <= 0) continue;
         
         const unitData = uw.GameData.units[unitId];
-        if (!unitData) continue;
+        if (!unitData) {
+            log('NAVAL', `[${cityName}] Unite ${unitId} non trouvee dans GameData`, 'warning');
+            continue;
+        }
+        
+        const requiredDocksLevel = shipBuildingRequirements[unitId] || 1;
+        if (docksLevel < requiredDocksLevel) {
+            log('NAVAL', `[${cityName}] ${unitData.name} requiert Port niv.${requiredDocksLevel} (actuel: ${docksLevel})`, 'warning');
+            continue;
+        }
         
         const cost = unitData.resources;
-        const maxAffordable = Math.min(
-            Math.floor(res.wood / cost.wood),
-            Math.floor(res.stone / cost.stone),
-            Math.floor(res.iron / cost.iron)
-        );
+        if (!cost || !cost.wood || !cost.stone || !cost.iron) {
+            log('NAVAL', `[${cityName}] Cout de ${unitData.name} non trouve`, 'warning');
+            continue;
+        }
         
-        const toRecruit = Math.min(needed, maxAffordable);
+        const maxByWood = Math.floor(res.wood / cost.wood);
+        const maxByStone = Math.floor(res.stone / cost.stone);
+        const maxByIron = Math.floor(res.iron / cost.iron);
+        const maxAffordable = Math.min(maxByWood, maxByStone, maxByIron);
+        
+        if (maxAffordable <= 0) {
+            log('NAVAL', `[${cityName}] ${unitData.name}: Ressources insuffisantes (besoin: ${cost.wood}/${cost.stone}/${cost.iron})`, 'info');
+            continue;
+        }
+        
+        const toRecruit = Math.min(needed, maxAffordable, buildQueueSlots);
         if (toRecruit <= 0) continue;
         
-        log('NAVAL', `[${cityName}] Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
-        recruitShips(cityId, unitId, toRecruit, unitData.name);
+        log('NAVAL', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit} (max: ${maxAffordable}, besoin: ${needed})`, 'info');
+        recruitShips(cityId, unitId, toRecruit, unitData.name, function() {
+            updateTargetsGrid();
+        });
         recruited = true;
         break;
     }
     
     if (!recruited) {
         log('NAVAL', '[' + cityName + '] Objectifs atteints ou ressources insuffisantes', 'info');
+    }
+}
+
+function getDocksLevelForTown(townId) {
+    try {
+        const tid = townId || getCurrentCityId();
+        
+        const town = uw.ITowns.getTown(tid);
+        if (town) {
+            if (typeof town.getBuildings === 'function') {
+                const b = town.getBuildings();
+                if (b && typeof b.get === 'function') {
+                    const docks = b.get('docks');
+                    if (typeof docks === 'number') return docks;
+                }
+                if (b && typeof b.docks === 'number') return b.docks;
+            }
+            
+            if (typeof town.buildings === 'function') {
+                const buildings = town.buildings();
+                if (buildings && typeof buildings.get === 'function') {
+                    const docks = buildings.get('docks');
+                    if (typeof docks === 'number') return docks;
+                }
+                if (buildings && typeof buildings.docks === 'number') return buildings.docks;
+            }
+        }
+        
+        const models = uw.MM.getModels();
+        if (models.Buildings && models.Buildings[tid]) {
+            const b = models.Buildings[tid];
+            if (b?.attributes?.docks !== undefined) return b.attributes.docks;
+            if (b?.docks !== undefined) return b.docks;
+        }
+        
+        if (models.Town && models.Town[tid]) {
+            const townModel = models.Town[tid];
+            if (townModel.attributes?.buildings?.docks !== undefined) {
+                return townModel.attributes.buildings.docks;
+            }
+        }
+        
+        return 0;
+    } catch(e) { 
+        console.log('[NAVAL] Erreur getDocksLevelForTown:', e);
+        return 0; 
+    }
+}
+
+function getBuildQueueSlots(townId) {
+    try {
+        const tid = townId || getCurrentCityId();
+        const models = uw.MM.getModels();
+        
+        let queueCount = 0;
+        if (models.UnitOrder) {
+            for (let id in models.UnitOrder) {
+                const order = models.UnitOrder[id];
+                const attrs = order?.attributes || order;
+                if (attrs?.town_id == tid && attrs?.kind === 'docks') {
+                    queueCount++;
+                }
+            }
+        }
+        
+        const maxSlots = 7;
+        return Math.max(0, maxSlots - queueCount);
+    } catch(e) {
+        console.log('[NAVAL] Erreur getBuildQueueSlots:', e);
+        return 7;
     }
 }
 
