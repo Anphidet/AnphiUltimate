@@ -29,9 +29,17 @@
             "servers": ["fr179"],
             "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
             "comment": "Dodoagrrr 179"
+        };
+        {
+            "name": "zankyx",
+            "playerId": 0,
+            "servers": ["fr179"],
+            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
 
 
