@@ -6,8 +6,9 @@ const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 const STORAGE_KEY = 'gu_calage_data';
 const INTERVALLE_VERIFICATION = 200;
-const TIMEOUT_VERIFICATION = 10000;
+const TIMEOUT_VERIFICATION = 30000;
 const AVANCE_LANCEMENT = 15000;
+const LIMITE_HORS_TOLERANCE = 10000;
 
 let calageData = {
     attaques: [],
@@ -321,6 +322,12 @@ module.render = function(container) {
                     <div class="calage-row">
                         <label>Heure d'arrivee:</label>
                         <input type="time" id="calage-edit-heure" class="calage-input" step="1">
+                    </div>
+                    <div class="calage-row">
+                        <label>Heros:</label>
+                        <select id="calage-edit-hero" class="calage-select">
+                            <option value="">-- Aucun heros --</option>
+                        </select>
                     </div>
                     
                     <div class="calage-units-title">🗡️ Unites terrestres</div>
@@ -990,6 +997,111 @@ function editerPlan(index) {
     changerVue('edition');
 }
 
+function getHeroInTown(townId) {
+    try {
+        const town = uw.ITowns.getTown(townId || uw.Game.townId);
+        if (town && typeof town.getHero === 'function') {
+            const hero = town.getHero();
+            if (hero) {
+                return {
+                    id: hero.getId ? hero.getId() : hero.id,
+                    name: hero.getName ? hero.getName() : hero.name,
+                    type: hero.getType ? hero.getType() : hero.type
+                };
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.Heroes) {
+                for (let heroId in models.Heroes) {
+                    const hero = models.Heroes[heroId];
+                    const attrs = hero.attributes || hero;
+                    if (attrs.home_town_id == townId || attrs.town_id == townId) {
+                        if (!attrs.is_traveling && attrs.current_town_id == townId) {
+                            return {
+                                id: attrs.id || heroId,
+                                name: attrs.name || getHeroDisplayName(attrs.type),
+                                type: attrs.type
+                            };
+                        }
+                    }
+                }
+            }
+            
+            if (models.PlayerHero) {
+                for (let heroId in models.PlayerHero) {
+                    const hero = models.PlayerHero[heroId];
+                    const attrs = hero.attributes || hero;
+                    if ((attrs.home_town_id == townId || attrs.town_id == townId) && 
+                        !attrs.is_traveling && attrs.current_town_id == townId) {
+                        return {
+                            id: attrs.id || heroId,
+                            name: attrs.name || getHeroDisplayName(attrs.type),
+                            type: attrs.type
+                        };
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        log('CALAGE', 'Erreur getHeroInTown: ' + e.message, 'warning');
+    }
+    return null;
+}
+
+function getHeroDisplayName(heroType) {
+    const heroNames = {
+        'andromeda': 'Andromede',
+        'odysseus': 'Ulysse',
+        'hercules': 'Hercule',
+        'helen': 'Helene',
+        'ferkyon': 'Ferkyon',
+        'leonidas': 'Leonidas',
+        'urephon': 'Urephon',
+        'zuretha': 'Zuretha',
+        'rekonos': 'Rekonos',
+        'jason': 'Jason',
+        'deimos': 'Deimos',
+        'pariphaistes': 'Pariphaistes',
+        'chiron': 'Chiron',
+        'democritos': 'Democritos',
+        'apheledes': 'Apheledes',
+        'atalanta': 'Atalante',
+        'iason': 'Iason',
+        'themistocles': 'Themistocle',
+        'orpheus': 'Orphee',
+        'telemachos': 'Telemaque',
+        'daidalos': 'Dedale',
+        'agamemnon': 'Agamemnon',
+        'aristophanes': 'Aristophane',
+        'pelops': 'Pelops',
+        'hector': 'Hector',
+        'myrmidon': 'Myrmidon',
+        'christopholus': 'Christopholus',
+        'medea': 'Medee'
+    };
+    return heroNames[heroType] || heroType || 'Heros';
+}
+
+function majHeroSelect(townId) {
+    const heroSelect = document.getElementById('calage-edit-hero');
+    if (!heroSelect) return;
+    
+    heroSelect.innerHTML = '<option value="">-- Aucun heros --</option>';
+    
+    const hero = getHeroInTown(townId);
+    if (hero) {
+        const opt = document.createElement('option');
+        opt.value = hero.id;
+        opt.textContent = '⚔️ ' + hero.name + (hero.type ? ' (' + hero.type + ')' : '');
+        heroSelect.appendChild(opt);
+        log('CALAGE', 'Heros disponible: ' + hero.name, 'info');
+    } else {
+        log('CALAGE', 'Aucun heros dans cette ville', 'info');
+    }
+}
+
 function majUnitsEdition() {
     const sourceId = parseInt(document.getElementById('calage-edit-source').value);
     const unitesDispo = getUnitesDispo(sourceId);
@@ -1021,6 +1133,7 @@ function majUnitsEdition() {
         gridNaval.innerHTML = '<div style="grid-column: span 5; text-align:center; color:#8B8B83; padding:20px; font-style:italic;">Aucune unite navale</div>';
     }
 
+    majHeroSelect(sourceId);
     majCapacite();
 }
 
@@ -1108,6 +1221,9 @@ function ajouterAttaqueAuPlan() {
 
     const sourceId = parseInt(document.getElementById('calage-edit-source').value);
     const heure = document.getElementById('calage-edit-heure').value;
+    const heroSelect = document.getElementById('calage-edit-hero');
+    const heroId = heroSelect ? heroSelect.value : '';
+    const heroName = heroSelect && heroSelect.selectedIndex > 0 ? heroSelect.options[heroSelect.selectedIndex].text : '';
     const units = recupererUnitesEdition();
 
     if (!sourceId || !heure) {
@@ -1132,6 +1248,8 @@ function ajouterAttaqueAuPlan() {
         heureEnvoi: null,
         travelTime: null,
         unites: units,
+        heroId: heroId || null,
+        heroName: heroName || null,
         status: 'attente',
         tentatives: 0
     };
@@ -1143,11 +1261,13 @@ function ajouterAttaqueAuPlan() {
         input.value = 0;
         input.parentElement.classList.remove('has-units');
     });
+    if (heroSelect) heroSelect.selectedIndex = 0;
     majCapacite();
 
     majAttaquesPlan();
 
-    afficherNotification('Attaque ajoutee', villeNom + ' -> ' + plan.cibleId + ' @ ' + heure, 'success');
+    const heroInfo = heroId ? ' avec ' + heroName : '';
+    afficherNotification('Attaque ajoutee', villeNom + ' -> ' + plan.cibleId + ' @ ' + heure + heroInfo, 'success');
 }
 
 function majAttaquesPlan() {
@@ -1175,6 +1295,8 @@ function majAttaquesPlan() {
             return u + ':' + atk.unites[u]; 
         }).join(', ');
 
+        const heroInfo = atk.heroId && atk.heroName ? ' | ⚔️ ' + atk.heroName : '';
+
         const statusClass = atk.status === 'succes' ? 'succes' : (atk.status === 'echec' ? 'echec' : (atk.status === 'encours' ? 'encours' : ''));
         const statusLabel = atk.status === 'succes' ? 'Succes' : (atk.status === 'echec' ? 'Echec' : (atk.status === 'encours' ? 'En cours' : 'En attente'));
         const statusBadgeClass = atk.status === 'succes' ? 'calage-status-succes' : (atk.status === 'echec' ? 'calage-status-echec' : (atk.status === 'encours' ? 'calage-status-encours' : 'calage-status-attente'));
@@ -1188,7 +1310,7 @@ function majAttaquesPlan() {
         div.className = 'calage-attaque-item ' + statusClass;
         div.innerHTML = 
             '<div class="calage-attaque-ville">' +
-                '<div class="calage-attaque-ville-name">' + atk.sourceNom + '</div>' +
+                '<div class="calage-attaque-ville-name">' + atk.sourceNom + heroInfo + '</div>' +
                 '<div class="calage-attaque-ville-units">' + unitsList + '</div>' +
                 '<div class="calage-attaque-trajet" style="font-size:10px;margin-top:4px;color:' + (hasCalc ? '#4CAF50' : '#FF9800') + ';">' +
                     '⏱️ Trajet: ' + travelTimeStr + ' | 🚀 Depart: ' + heureEnvoiStr +
@@ -1201,6 +1323,8 @@ function majAttaquesPlan() {
             '</div>' +
             '<div style="display:flex;flex-direction:column;gap:4px;align-items:center;">' +
                 '<span class="calage-attaque-status ' + statusBadgeClass + '">' + statusLabel + '</span>' +
+                (atk.tentatives > 0 ? '<span style="font-size:9px;color:#8B8B83;">' + atk.tentatives + ' essai(s)</span>' : '') +
+                (atk.status === 'echec' && atk.erreur ? '<span style="font-size:9px;color:#E53935;max-width:100px;text-align:center;">' + atk.erreur + '</span>' : '') +
                 (atk.status === 'attente' && !hasCalc && !isCalculating ? 
                     '<button class="calage-btn calage-btn-primary calage-btn-sm btn-calc-trajet" data-idx="' + idx + '" style="font-size:9px;padding:3px 6px;">⏱️ Calculer</button>' : '') +
             '</div>' +
@@ -1944,6 +2068,18 @@ function traiterReponseAttaque(response, atk) {
 
             sendWebhook('Calage Reussi!', 
                 `**${atk.sourceNom || atk.sourceId} -> ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
+            return;
+        }
+
+        if (diff > toleranceMax + LIMITE_HORS_TOLERANCE) {
+            log('CALAGE', 'ABANDON: Hors tolerance de +' + Math.round(diff/1000) + 's (limite: +' + Math.round((toleranceMax + LIMITE_HORS_TOLERANCE)/1000) + 's)', 'error');
+            marquerAttaqueEchec(atk, 'Hors tolerance: ' + signe + diffSec + 's (trop tard, abandon)');
+            
+            afficherNotification(
+                'Calage abandonne',
+                (atk.sourceNom || atk.sourceId) + ' -> ' + atk.cibleId + ' | Trop tard: ' + signe + diffSec + 's',
+                'attack'
+            );
             return;
         }
 
