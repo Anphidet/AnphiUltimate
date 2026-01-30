@@ -53,16 +53,43 @@ function getStorageCapacity(townId) {
 function getMarketplaceLevel(townId) {
     try {
         const tid = townId || getCurrentCityId();
+        
         const town = uw.ITowns.getTown(tid);
-        if (town && town.buildings) {
-            const buildings = town.buildings();
-            return buildings?.market || 1;
+        if (town) {
+            if (typeof town.buildings === 'function') {
+                const buildings = town.buildings();
+                if (buildings && buildings.market) return buildings.market;
+            }
+            if (town.getBuildings) {
+                const buildings = town.getBuildings();
+                if (buildings && buildings.market) return buildings.market;
+            }
         }
+        
         const townModel = uw.MM.getModels().Town[tid];
-        if (townModel?.attributes?.buildings) {
-            return townModel.attributes.buildings.market || 1;
+        if (townModel?.attributes?.buildings?.market) {
+            return townModel.attributes.buildings.market;
         }
-    } catch(e) {}
+        
+        const buildings = uw.MM.getModels().Buildings;
+        if (buildings) {
+            for (let id in buildings) {
+                const b = buildings[id];
+                if (b?.attributes?.town_id === tid && b?.attributes?.market) {
+                    return b.attributes.market;
+                }
+            }
+        }
+        
+        const playerBuildings = uw.MM.getModels().PlayerBuildings;
+        if (playerBuildings && playerBuildings[tid]) {
+            const pb = playerBuildings[tid];
+            if (pb?.attributes?.market) return pb.attributes.market;
+        }
+        
+    } catch(e) { 
+        console.log('[COMMERCE] Erreur getMarketplaceLevel:', e);
+    }
     return 1;
 }
 
@@ -226,17 +253,17 @@ module.render = function(container) {
                         <div class="commerce-res-row">
                             <span class="commerce-res-icon">🪵</span>
                             <label>Bois:</label>
-                            <input type="number" id="commerce-edit-wood" class="commerce-input commerce-input-sm" value="0" min="0">
+                            <input type="number" id="commerce-edit-wood" class="commerce-input" value="0" min="0">
                         </div>
                         <div class="commerce-res-row">
                             <span class="commerce-res-icon">🪨</span>
                             <label>Pierre:</label>
-                            <input type="number" id="commerce-edit-stone" class="commerce-input commerce-input-sm" value="0" min="0">
+                            <input type="number" id="commerce-edit-stone" class="commerce-input" value="0" min="0">
                         </div>
                         <div class="commerce-res-row">
                             <span class="commerce-res-icon">⛏️</span>
                             <label>Argent:</label>
-                            <input type="number" id="commerce-edit-iron" class="commerce-input commerce-input-sm" value="0" min="0">
+                            <input type="number" id="commerce-edit-iron" class="commerce-input" value="0" min="0">
                         </div>
                     </div>
                     
@@ -409,7 +436,6 @@ module.render = function(container) {
                 border-color: #D4AF37;
                 box-shadow: 0 0 10px rgba(212,175,55,0.3);
             }
-            .commerce-input-sm { max-width: 100px; }
             
             .commerce-btn {
                 padding: 10px 20px;
@@ -532,19 +558,23 @@ module.render = function(container) {
             
             .commerce-resources-input {
                 display: flex;
-                gap: 15px;
+                flex-direction: column;
+                gap: 10px;
                 margin: 15px 0;
             }
             .commerce-res-row {
-                flex: 1;
                 display: flex;
                 align-items: center;
-                gap: 5px;
+                gap: 10px;
             }
             .commerce-res-row label {
-                font-size: 11px;
+                font-size: 12px;
                 color: #BDB76B;
-                width: auto;
+                width: 60px;
+            }
+            .commerce-res-row input {
+                flex: 1;
+                max-width: 150px;
             }
             .commerce-res-icon { font-size: 16px; }
             
