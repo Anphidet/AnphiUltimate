@@ -1097,21 +1097,22 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
     
     const csrfToken = uw.Game.csrfToken;
     const data = {
-        id: destId,
+        from: sourceId,
+        to: destId,
         wood: wood,
-        stone: stone,
         iron: iron,
+        stone: stone,
         town_id: sourceId,
         nl_init: true
     };
     
     log('COMMERCE', 'Envoi en cours...', 'info');
     log('COMMERCE', 'JSON: ' + JSON.stringify(data), 'info');
-    log('COMMERCE', 'URL: /game/town_info?town_id=' + sourceId + '&action=town_overviews_trade', 'info');
+    log('COMMERCE', 'URL: /game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns', 'info');
     
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_info?town_id=' + sourceId + '&action=town_overviews_trade&h=' + csrfToken,
+        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns&h=' + csrfToken,
         data: { json: JSON.stringify(data) },
         dataType: 'json',
         success: function(response) {
@@ -1132,7 +1133,6 @@ function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
         },
         error: function(xhr, status, error) {
             log('COMMERCE', 'ECHEC - Erreur reseau: ' + (error || status), 'error');
-            log('COMMERCE', 'XHR status: ' + xhr.status + ', response: ' + xhr.responseText, 'error');
             callback(false);
         }
     });
