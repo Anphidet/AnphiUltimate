@@ -1,0 +1,1000 @@
+const uw = module.uw;
+const log = module.log;
+const GM_getValue = module.GM_getValue;
+const GM_setValue = module.GM_setValue;
+
+const STORAGE_KEY = 'gu_culture_data_v1';
+
+const CELEBRATIONS = {
+    party: {
+        id: 'party',
+        name: 'Festival',
+        icon: '🎉',
+        duration: 5 * 60 * 60,
+        cost: { wood: 15000, stone: 18000, iron: 15000 },
+        requires: { academy: 30 },
+        description: '+200 Culture'
+    },
+    games: {
+        id: 'games',
+        name: 'Jeux Olympiques',
+        icon: '🏆',
+        duration: 12 * 60 * 60,
+        cost: { wood: 0, stone: 0, iron: 0, gold: 50 },
+        requires: { academy: 30 },
+        description: '+400 Culture'
+    },
+    triumph: {
+        id: 'triumph',
+        name: 'Marche Triomphale',
+        icon: '🎖️',
+        duration: 8 * 60 * 60,
+        cost: { wood: 0, stone: 0, iron: 0, bp: 300 },
+        requires: {},
+        description: '+300 Culture'
+    },
+    theater: {
+        id: 'theater',
+        name: 'Piece de Theatre',
+        icon: '🎭',
+        duration: 8 * 60 * 60,
+        cost: { wood: 10000, stone: 12000, iron: 10000 },
+        requires: { theater: 1 },
+        description: '+400 Culture'
+    }
+};
+
+let cultureData = {
+    enabled: false,
+    townSettings: {},
+    stats: { totalCelebrations: 0, lastCelebration: null },
+    nextCheckTime: 0,
+    checkInterval: 60
+};
+
+const defaultTownSettings = {
+    party: true,
+    games: true,
+    triumph: true,
+    theater: true
+};
+
+function getCurrentCityId() { 
+    try { return uw.ITowns.getCurrentTown().id; } 
+    catch(e) { return null; } 
+}
+
+function getCurrentTownName() { 
+    try { return uw.ITowns.getCurrentTown().getName(); } 
+    catch(e) { return 'Ville inconnue'; } 
+}
+
+function getTownNameById(townId) {
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (town) return town.getName ? town.getName() : town.name;
+    } catch(e) {}
+    return 'Ville ' + townId;
+}
+
+function getAllTowns() {
+    const towns = [];
+    try {
+        if (uw.ITowns && uw.ITowns.getTowns) {
+            const allTowns = uw.ITowns.getTowns();
+            for (let id in allTowns) {
+                const town = allTowns[id];
+                towns.push({
+                    id: parseInt(id),
+                    name: town.getName ? town.getName() : town.name
+                });
+            }
+        }
+    } catch(e) {}
+    return towns;
+}
+
+function getResourcesForTown(townId) {
+    try {
+        const town = uw.MM.getModels().Town[townId];
+        return town?.attributes?.resources || { wood: 0, stone: 0, iron: 0 };
+    } catch(e) { return { wood: 0, stone: 0, iron: 0 }; }
+}
+
+function getGoldForPlayer() {
+    try {
+        const playerGold = uw.MM.getModels().PlayerGold;
+        if (playerGold) {
+            for (let id in playerGold) {
+                return playerGold[id]?.attributes?.gold || 0;
+            }
+        }
+        if (uw.Game && uw.Game.premium_features) {
+            return uw.Game.premium_features.gold || 0;
+        }
+    } catch(e) {}
+    return 0;
+}
+
+function getBattlePointsForPlayer() {
+    try {
+        const playerData = uw.MM.getModels().Player;
+        if (playerData) {
+            for (let id in playerData) {
+                const p = playerData[id];
+                return p?.attributes?.battle_points || p?.attributes?.bp || 0;
+            }
+        }
+        if (uw.Game && typeof uw.Game.battle_points !== 'undefined') {
+            return uw.Game.battle_points;
+        }
+    } catch(e) {}
+    return 0;
+}
+
+function getBuildingLevel(townId, buildingId) {
+    try {
+        const buildings = uw.MM.getModels().Buildings;
+        if (buildings && buildings[townId]) {
+            const townBuildings = buildings[townId];
+            if (townBuildings.attributes && townBuildings.attributes[buildingId] !== undefined) {
+                return townBuildings.attributes[buildingId];
+            }
+            if (townBuildings[buildingId] !== undefined) {
+                return townBuildings[buildingId];
+            }
+        }
+        
+        const town = uw.ITowns.getTown(townId);
+        if (town) {
+            if (typeof town.buildings === 'function') {
+                const b = town.buildings();
+                if (b && b[buildingId] !== undefined) return b[buildingId];
+            }
+            if (typeof town.getBuildings === 'function') {
+                const b = town.getBuildings();
+                if (b && b[buildingId] !== undefined) return b[buildingId];
+            }
+            if (town.buildings && typeof town.buildings !== 'function') {
+                if (town.buildings[buildingId] !== undefined) return town.buildings[buildingId];
+            }
+        }
+    } catch(e) { 
+        console.log('[CULTURE] Erreur getBuildingLevel:', e);
+    }
+    return 0;
+}
+
+function hasAcademyLevel30(townId) {
+    return getBuildingLevel(townId, 'academy') >= 30;
+}
+
+function hasTheater(townId) {
+    return getBuildingLevel(townId, 'theater') >= 1;
+}
+
+function canCelebrate(townId, celebrationId) {
+    const celebration = CELEBRATIONS[celebrationId];
+    if (!celebration) return { can: false, reason: 'Celebration inconnue' };
+    
+    for (let building in celebration.requires) {
+        const requiredLevel = celebration.requires[building];
+        const currentLevel = getBuildingLevel(townId, building);
+        if (currentLevel < requiredLevel) {
+            return { 
+                can: false, 
+                reason: `${building === 'academy' ? 'Academie' : 'Theatre'} niveau ${requiredLevel} requis (actuel: ${currentLevel})`
+            };
+        }
+    }
+    
+    const resources = getResourcesForTown(townId);
+    const cost = celebration.cost;
+    
+    if (cost.wood && resources.wood < cost.wood) {
+        return { can: false, reason: `Bois insuffisant (${resources.wood}/${cost.wood})` };
+    }
+    if (cost.stone && resources.stone < cost.stone) {
+        return { can: false, reason: `Pierre insuffisante (${resources.stone}/${cost.stone})` };
+    }
+    if (cost.iron && resources.iron < cost.iron) {
+        return { can: false, reason: `Argent insuffisant (${resources.iron}/${cost.iron})` };
+    }
+    
+    if (cost.gold) {
+        const gold = getGoldForPlayer();
+        if (gold < cost.gold) {
+            return { can: false, reason: `Or insuffisant (${gold}/${cost.gold})` };
+        }
+    }
+    
+    if (cost.bp) {
+        const bp = getBattlePointsForPlayer();
+        if (bp < cost.bp) {
+            return { can: false, reason: `Points de combat insuffisants (${bp}/${cost.bp})` };
+        }
+    }
+    
+    return { can: true, reason: 'OK' };
+}
+
+function getCelebrationInProgress(townId) {
+    try {
+        const celebrations = uw.MM.getModels().CelebrationParty || uw.MM.getModels().Celebration;
+        if (celebrations) {
+            for (let id in celebrations) {
+                const celeb = celebrations[id];
+                if (celeb?.attributes?.town_id === townId || celeb?.town_id === townId) {
+                    return {
+                        type: celeb.attributes?.celebration_type || celeb.celebration_type,
+                        finishTime: celeb.attributes?.finished_at || celeb.finished_at
+                    };
+                }
+            }
+        }
+        
+        const town = uw.ITowns.getTown(townId);
+        if (town) {
+            if (typeof town.getCelebration === 'function') {
+                const c = town.getCelebration();
+                if (c) return { type: c.type || c.celebration_type, finishTime: c.finished_at };
+            }
+            if (town.celebration && town.celebration()) {
+                const c = town.celebration();
+                if (c) return { type: c.type || c.celebration_type, finishTime: c.finished_at };
+            }
+        }
+    } catch(e) {}
+    return null;
+}
+
+function startCelebration(townId, celebrationId, callback) {
+    const celebration = CELEBRATIONS[celebrationId];
+    if (!celebration) {
+        log('CULTURE', 'Celebration inconnue: ' + celebrationId, 'error');
+        if (callback) callback(false);
+        return;
+    }
+    
+    const checkResult = canCelebrate(townId, celebrationId);
+    if (!checkResult.can) {
+        log('CULTURE', `[${getTownNameById(townId)}] ${celebration.name}: ${checkResult.reason}`, 'warning');
+        if (callback) callback(false);
+        return;
+    }
+    
+    const csrfToken = uw.Game.csrfToken;
+    
+    uw.$.ajax({
+        type: 'POST',
+        url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
+        data: { 
+            json: JSON.stringify({ 
+                celebration_type: celebrationId, 
+                town_id: townId,
+                nl_init: true 
+            }) 
+        },
+        dataType: 'json',
+        success: function(response) {
+            if (response?.json?.error) {
+                log('CULTURE', `[${getTownNameById(townId)}] Erreur ${celebration.name}: ${response.json.error}`, 'error');
+                if (callback) callback(false);
+                return;
+            }
+            
+            cultureData.stats.totalCelebrations++;
+            cultureData.stats.lastCelebration = {
+                town: getTownNameById(townId),
+                type: celebration.name,
+                time: Date.now()
+            };
+            saveData();
+            
+            log('CULTURE', `[${getTownNameById(townId)}] ${celebration.icon} ${celebration.name} lance!`, 'success');
+            if (callback) callback(true);
+        },
+        error: function(xhr, status, error) {
+            log('CULTURE', `[${getTownNameById(townId)}] Erreur reseau: ${error}`, 'error');
+            if (callback) callback(false);
+        }
+    });
+}
+
+function getTownSettings(townId) {
+    const tid = townId || getCurrentCityId();
+    if (!cultureData.townSettings[tid]) {
+        cultureData.townSettings[tid] = { ...defaultTownSettings };
+    }
+    return cultureData.townSettings[tid];
+}
+
+function setTownCelebrationEnabled(townId, celebrationId, enabled) {
+    if (!cultureData.townSettings[townId]) {
+        cultureData.townSettings[townId] = { ...defaultTownSettings };
+    }
+    cultureData.townSettings[townId][celebrationId] = enabled;
+    saveData();
+}
+
+function isCelebrationAvailable(townId, celebrationId) {
+    const celebration = CELEBRATIONS[celebrationId];
+    if (!celebration) return false;
+    
+    for (let building in celebration.requires) {
+        const requiredLevel = celebration.requires[building];
+        const currentLevel = getBuildingLevel(townId, building);
+        if (currentLevel < requiredLevel) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function runCultureCycle() {
+    if (!cultureData.enabled) return;
+    
+    const towns = getAllTowns();
+    let celebrationStarted = false;
+    
+    for (let town of towns) {
+        const townId = town.id;
+        const settings = getTownSettings(townId);
+        
+        const inProgress = getCelebrationInProgress(townId);
+        if (inProgress) {
+            continue;
+        }
+        
+        const celebrationOrder = ['party', 'games', 'triumph', 'theater'];
+        
+        for (let celebId of celebrationOrder) {
+            if (!settings[celebId]) continue;
+            if (!isCelebrationAvailable(townId, celebId)) continue;
+            
+            const checkResult = canCelebrate(townId, celebId);
+            if (checkResult.can) {
+                startCelebration(townId, celebId, function(success) {
+                    if (success) {
+                        celebrationStarted = true;
+                    }
+                });
+                break;
+            }
+        }
+    }
+    
+    cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
+    saveData();
+}
+
+function formatDuration(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h > 0 ? `${h}h${m}m` : `${m}m`;
+}
+
+function formatCost(cost) {
+    const parts = [];
+    if (cost.wood) parts.push(`🪵${cost.wood}`);
+    if (cost.stone) parts.push(`🪨${cost.stone}`);
+    if (cost.iron) parts.push(`⛏️${cost.iron}`);
+    if (cost.gold) parts.push(`💰${cost.gold}`);
+    if (cost.bp) parts.push(`⚔️${cost.bp}BP`);
+    return parts.join(' ');
+}
+
+module.render = function(container) {
+    container.innerHTML = `
+        <div class="main-control inactive" id="culture-control">
+            <div class="control-info">
+                <div class="control-label">Auto Culture</div>
+                <div class="control-status" id="culture-status">En attente</div>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="toggle-culture">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>⏱️</span> Prochain Check</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div class="timer-container">
+                    <div class="timer-label">Temps restant</div>
+                    <div class="timer-value" id="culture-timer">--:--</div>
+                </div>
+                <button class="btn btn-success" style="width:100%;margin-top:12px;" id="culture-check-now">Verifier maintenant</button>
+            </div>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>⚙️</span> Options</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div class="option-group">
+                    <span class="option-label">Intervalle de verification</span>
+                    <select class="option-select" id="culture-interval">
+                        <option value="30">30 secondes</option>
+                        <option value="60">1 minute</option>
+                        <option value="120">2 minutes</option>
+                        <option value="300">5 minutes</option>
+                        <option value="600">10 minutes</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>🏛️</span> Configuration des Villes</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <p style="font-size:11px;color:#BDB76B;margin-bottom:12px;">Selectionnez les celebrations a activer pour chaque ville. Les options grisees ne sont pas disponibles (batiment manquant).</p>
+                <div id="culture-towns-grid"></div>
+            </div>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>📋</span> Status des Villes</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div id="culture-status-list"></div>
+            </div>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>📊</span> Statistiques</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-value" id="culture-stat-total">0</span>
+                        <span class="stat-label">Celebrations</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-value" id="culture-stat-last">-</span>
+                        <span class="stat-label">Derniere</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>ℹ️</span> Info Celebrations</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content" id="culture-info-content">
+                <div class="culture-info-grid">
+                    ${Object.values(CELEBRATIONS).map(c => `
+                        <div class="culture-info-item">
+                            <div class="culture-info-header">
+                                <span class="culture-info-icon">${c.icon}</span>
+                                <span class="culture-info-name">${c.name}</span>
+                            </div>
+                            <div class="culture-info-details">
+                                <div class="culture-info-cost">${formatCost(c.cost)}</div>
+                                <div class="culture-info-duration">⏱️ ${formatDuration(c.duration)}</div>
+                                <div class="culture-info-desc">${c.description}</div>
+                                ${Object.keys(c.requires).length > 0 ? `<div class="culture-info-req">Requis: ${Object.entries(c.requires).map(([b,l]) => `${b === 'academy' ? 'Academie' : 'Theatre'} niv.${l}`).join(', ')}</div>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>
+        
+        <style>
+            #culture-towns-grid {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                max-height: 400px;
+                overflow-y: auto;
+            }
+            .culture-town-card {
+                background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(212,175,55,0.3);
+                border-radius: 8px;
+                padding: 12px;
+            }
+            .culture-town-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid rgba(212,175,55,0.2);
+            }
+            .culture-town-name {
+                font-family: 'Cinzel', serif;
+                font-size: 13px;
+                font-weight: 600;
+                color: #F5DEB3;
+            }
+            .culture-town-status {
+                font-size: 10px;
+                padding: 3px 8px;
+                border-radius: 10px;
+                background: rgba(76,175,80,0.3);
+                color: #81C784;
+            }
+            .culture-town-status.busy {
+                background: rgba(255,152,0,0.3);
+                color: #FFB74D;
+            }
+            .culture-celebrations {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
+            }
+            .culture-celebration-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 10px;
+                background: rgba(0,0,0,0.2);
+                border: 1px solid rgba(212,175,55,0.2);
+                border-radius: 6px;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .culture-celebration-item:hover:not(.disabled) {
+                border-color: rgba(212,175,55,0.5);
+                background: rgba(0,0,0,0.3);
+            }
+            .culture-celebration-item.disabled {
+                opacity: 0.4;
+                cursor: not-allowed;
+            }
+            .culture-celebration-item.active {
+                border-color: rgba(76,175,80,0.6);
+                background: rgba(76,175,80,0.15);
+            }
+            .culture-celebration-checkbox {
+                width: 18px;
+                height: 18px;
+                accent-color: #4CAF50;
+                cursor: pointer;
+            }
+            .culture-celebration-checkbox:disabled {
+                cursor: not-allowed;
+            }
+            .culture-celebration-icon {
+                font-size: 16px;
+            }
+            .culture-celebration-name {
+                font-size: 11px;
+                color: #F5DEB3;
+                flex: 1;
+            }
+            .culture-celebration-item.disabled .culture-celebration-name {
+                color: #666;
+            }
+            
+            #culture-status-list {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                max-height: 200px;
+                overflow-y: auto;
+            }
+            .culture-status-item {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 8px 12px;
+                background: rgba(0,0,0,0.2);
+                border-radius: 6px;
+                font-size: 11px;
+            }
+            .culture-status-town {
+                color: #F5DEB3;
+                font-weight: 600;
+            }
+            .culture-status-state {
+                padding: 3px 8px;
+                border-radius: 10px;
+                font-size: 10px;
+            }
+            .culture-status-state.idle {
+                background: rgba(139,139,131,0.3);
+                color: #8B8B83;
+            }
+            .culture-status-state.celebrating {
+                background: rgba(76,175,80,0.3);
+                color: #81C784;
+            }
+            .culture-status-state.waiting {
+                background: rgba(255,152,0,0.3);
+                color: #FFB74D;
+            }
+            
+            .culture-info-grid {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+            .culture-info-item {
+                background: rgba(0,0,0,0.2);
+                border: 1px solid rgba(212,175,55,0.2);
+                border-radius: 6px;
+                padding: 10px;
+            }
+            .culture-info-header {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 8px;
+                padding-bottom: 6px;
+                border-bottom: 1px solid rgba(212,175,55,0.15);
+            }
+            .culture-info-icon {
+                font-size: 18px;
+            }
+            .culture-info-name {
+                font-family: 'Cinzel', serif;
+                font-size: 12px;
+                font-weight: 600;
+                color: #D4AF37;
+            }
+            .culture-info-details {
+                font-size: 10px;
+                color: #BDB76B;
+            }
+            .culture-info-cost {
+                margin-bottom: 4px;
+            }
+            .culture-info-duration {
+                color: #8B8B83;
+                margin-bottom: 4px;
+            }
+            .culture-info-desc {
+                color: #81C784;
+                margin-bottom: 4px;
+            }
+            .culture-info-req {
+                color: #E57373;
+                font-style: italic;
+            }
+            
+            .culture-select-all-row {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 12px;
+                padding-bottom: 12px;
+                border-bottom: 1px solid rgba(212,175,55,0.2);
+            }
+            .culture-select-all-btn {
+                flex: 1;
+                padding: 8px 12px;
+                background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(212,175,55,0.3);
+                border-radius: 6px;
+                color: #BDB76B;
+                font-size: 11px;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .culture-select-all-btn:hover {
+                background: rgba(212,175,55,0.2);
+                color: #F5DEB3;
+            }
+        </style>
+    `;
+};
+
+module.init = function() {
+    loadData();
+    
+    document.getElementById('toggle-culture').checked = cultureData.enabled;
+    document.getElementById('culture-interval').value = cultureData.checkInterval;
+    
+    document.getElementById('toggle-culture').onchange = (e) => toggleCulture(e.target.checked);
+    document.getElementById('culture-interval').onchange = (e) => {
+        cultureData.checkInterval = parseInt(e.target.value);
+        saveData();
+        log('CULTURE', 'Intervalle: ' + cultureData.checkInterval + 's', 'info');
+    };
+    document.getElementById('culture-check-now').onclick = () => {
+        log('CULTURE', 'Verification manuelle...', 'info');
+        runCultureCycle();
+        updateStatusList();
+    };
+    
+    document.querySelectorAll('.section-header').forEach(header => {
+        header.onclick = () => header.classList.toggle('collapsed');
+    });
+    
+    updateTownsGrid();
+    updateStatusList();
+    updateStats();
+    startTimer();
+    
+    setupTownChangeObserver();
+    
+    log('CULTURE', 'Module initialise', 'info');
+};
+
+module.isActive = function() {
+    return cultureData.enabled;
+};
+
+module.onActivate = function(container) {
+    updateTownsGrid();
+    updateStatusList();
+    updateStats();
+};
+
+function toggleCulture(enabled) {
+    cultureData.enabled = enabled;
+    
+    const ctrl = document.getElementById('culture-control');
+    const status = document.getElementById('culture-status');
+    
+    if (enabled) {
+        ctrl.classList.remove('inactive');
+        status.textContent = 'Actif';
+        log('CULTURE', 'Auto Culture active', 'success');
+        cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
+        runCultureCycle();
+    } else {
+        ctrl.classList.add('inactive');
+        status.textContent = 'En attente';
+        log('CULTURE', 'Auto Culture desactive', 'info');
+    }
+    
+    saveData();
+    
+    if (window.GrepolisUltimate) {
+        window.GrepolisUltimate.updateButtonState();
+    }
+}
+
+function updateTownsGrid() {
+    const container = document.getElementById('culture-towns-grid');
+    if (!container) return;
+    
+    const towns = getAllTowns();
+    
+    if (towns.length === 0) {
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;padding:20px;">Aucune ville trouvee</div>';
+        return;
+    }
+    
+    let html = `
+        <div class="culture-select-all-row">
+            <button class="culture-select-all-btn" id="culture-select-all">✅ Tout activer</button>
+            <button class="culture-select-all-btn" id="culture-deselect-all">❌ Tout desactiver</button>
+        </div>
+    `;
+    
+    for (let town of towns) {
+        const townId = town.id;
+        const settings = getTownSettings(townId);
+        const inProgress = getCelebrationInProgress(townId);
+        
+        const hasAcademy30 = hasAcademyLevel30(townId);
+        const hasTheaterBuilding = hasTheater(townId);
+        
+        html += `
+            <div class="culture-town-card" data-town-id="${townId}">
+                <div class="culture-town-header">
+                    <span class="culture-town-name">${town.name}</span>
+                    <span class="culture-town-status ${inProgress ? 'busy' : ''}">${inProgress ? '🎉 En cours' : '✅ Disponible'}</span>
+                </div>
+                <div class="culture-celebrations">
+                    ${Object.values(CELEBRATIONS).map(celeb => {
+                        let available = true;
+                        let tooltip = '';
+                        
+                        if (celeb.requires.academy && !hasAcademy30) {
+                            available = false;
+                            tooltip = 'Academie niveau 30 requise';
+                        }
+                        if (celeb.requires.theater && !hasTheaterBuilding) {
+                            available = false;
+                            tooltip = 'Theatre requis';
+                        }
+                        
+                        const isActive = settings[celeb.id] && available;
+                        
+                        return `
+                            <div class="culture-celebration-item ${!available ? 'disabled' : ''} ${isActive ? 'active' : ''}" 
+                                 data-town="${townId}" 
+                                 data-celebration="${celeb.id}"
+                                 title="${tooltip}">
+                                <input type="checkbox" 
+                                       class="culture-celebration-checkbox"
+                                       ${isActive ? 'checked' : ''}
+                                       ${!available ? 'disabled' : ''}
+                                       data-town="${townId}"
+                                       data-celebration="${celeb.id}">
+                                <span class="culture-celebration-icon">${celeb.icon}</span>
+                                <span class="culture-celebration-name">${celeb.name}</span>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+    
+    container.querySelectorAll('.culture-celebration-checkbox').forEach(checkbox => {
+        checkbox.onchange = function() {
+            const townId = parseInt(this.dataset.town);
+            const celebId = this.dataset.celebration;
+            setTownCelebrationEnabled(townId, celebId, this.checked);
+            
+            const item = this.closest('.culture-celebration-item');
+            if (this.checked) {
+                item.classList.add('active');
+            } else {
+                item.classList.remove('active');
+            }
+        };
+    });
+    
+    document.getElementById('culture-select-all')?.addEventListener('click', () => {
+        selectAllCelebrations(true);
+    });
+    
+    document.getElementById('culture-deselect-all')?.addEventListener('click', () => {
+        selectAllCelebrations(false);
+    });
+}
+
+function selectAllCelebrations(enable) {
+    const towns = getAllTowns();
+    
+    for (let town of towns) {
+        const townId = town.id;
+        
+        for (let celebId of Object.keys(CELEBRATIONS)) {
+            if (isCelebrationAvailable(townId, celebId)) {
+                setTownCelebrationEnabled(townId, celebId, enable);
+            }
+        }
+    }
+    
+    updateTownsGrid();
+    log('CULTURE', enable ? 'Toutes les celebrations activees' : 'Toutes les celebrations desactivees', 'info');
+}
+
+function updateStatusList() {
+    const container = document.getElementById('culture-status-list');
+    if (!container) return;
+    
+    const towns = getAllTowns();
+    
+    if (towns.length === 0) {
+        container.innerHTML = '<div style="text-align:center;color:#8B8B83;padding:10px;">Aucune ville</div>';
+        return;
+    }
+    
+    let html = '';
+    
+    for (let town of towns) {
+        const townId = town.id;
+        const inProgress = getCelebrationInProgress(townId);
+        const settings = getTownSettings(townId);
+        
+        const hasAnyCelebEnabled = Object.keys(CELEBRATIONS).some(c => 
+            settings[c] && isCelebrationAvailable(townId, c)
+        );
+        
+        let stateClass = 'idle';
+        let stateText = 'Inactif';
+        
+        if (inProgress) {
+            stateClass = 'celebrating';
+            const celebName = CELEBRATIONS[inProgress.type]?.name || inProgress.type;
+            const finishTime = inProgress.finishTime ? new Date(inProgress.finishTime * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
+            stateText = `${celebName} ${finishTime ? '(fin ' + finishTime + ')' : ''}`;
+        } else if (hasAnyCelebEnabled) {
+            stateClass = 'waiting';
+            stateText = 'En attente';
+        }
+        
+        html += `
+            <div class="culture-status-item">
+                <span class="culture-status-town">${town.name}</span>
+                <span class="culture-status-state ${stateClass}">${stateText}</span>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+function updateStats() {
+    const totalEl = document.getElementById('culture-stat-total');
+    const lastEl = document.getElementById('culture-stat-last');
+    
+    if (totalEl) totalEl.textContent = cultureData.stats.totalCelebrations;
+    if (lastEl) {
+        if (cultureData.stats.lastCelebration) {
+            lastEl.textContent = cultureData.stats.lastCelebration.type || '-';
+        } else {
+            lastEl.textContent = '-';
+        }
+    }
+}
+
+let timerInterval = null;
+
+function startTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    
+    timerInterval = setInterval(() => {
+        const el = document.getElementById('culture-timer');
+        if (!el) return;
+        
+        if (!cultureData.enabled) {
+            el.textContent = '--:--';
+            el.classList.remove('ready');
+            return;
+        }
+        
+        const diff = cultureData.nextCheckTime - Date.now();
+        
+        if (diff <= 0) {
+            runCultureCycle();
+            cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
+            updateStatusList();
+        }
+        
+        el.classList.remove('ready');
+        const m = Math.max(0, Math.floor(diff / 60000)).toString().padStart(2, '0');
+        const s = Math.max(0, Math.floor((diff % 60000) / 1000)).toString().padStart(2, '0');
+        el.textContent = `${m}:${s}`;
+        
+    }, 1000);
+}
+
+function setupTownChangeObserver() {
+    try {
+        if (uw.$.Observer) {
+            uw.$.Observer(uw.GameEvents.town.town_switch).subscribe('gu_culture_town_switch', function() {
+                setTimeout(() => {
+                    updateStatusList();
+                }, 500);
+            });
+        }
+    } catch(e) {}
+}
+
+function saveData() {
+    GM_setValue(STORAGE_KEY, JSON.stringify({
+        enabled: cultureData.enabled,
+        townSettings: cultureData.townSettings,
+        stats: cultureData.stats,
+        checkInterval: cultureData.checkInterval
+    }));
+}
+
+function loadData() {
+    const saved = GM_getValue(STORAGE_KEY);
+    if (saved) {
+        try {
+            const d = JSON.parse(saved);
+            cultureData.enabled = d.enabled || false;
+            cultureData.townSettings = d.townSettings || {};
+            cultureData.stats = d.stats || cultureData.stats;
+            cultureData.checkInterval = d.checkInterval || 60;
+        } catch(e) {}
+    }
+}
