@@ -5,19 +5,49 @@ const GM_setValue = module.GM_setValue;
 const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 let navalData = {
-    enabled: false,
-    settings: { 
-        checkInterval: 5, 
-        recruitMode: 'queue',
-        storageThreshold: 80,
-        webhook: '' 
-    },
+    enabledTowns: {},
+    townSettings: {},
     stats: { totalRecruited: 0, recruitCycles: 0 },
     queues: {},
     targets: {},
     plans: [],
-    nextCheckTime: 0
+    nextCheckTimes: {}
 };
+
+const defaultNavalSettings = {
+    checkInterval: 5,
+    recruitMode: 'queue',
+    storageThreshold: 80,
+    webhook: ''
+};
+
+function getNavalTownSettings(townId) {
+    const tid = townId || getCurrentCityId();
+    if (!navalData.townSettings[tid]) {
+        navalData.townSettings[tid] = { ...defaultNavalSettings };
+    }
+    return navalData.townSettings[tid];
+}
+
+function setNavalTownSetting(key, value, townId) {
+    const tid = townId || getCurrentCityId();
+    if (!navalData.townSettings[tid]) {
+        navalData.townSettings[tid] = { ...defaultNavalSettings };
+    }
+    navalData.townSettings[tid][key] = value;
+    saveData();
+}
+
+function isNavalTownEnabled(townId) {
+    const tid = townId || getCurrentCityId();
+    return navalData.enabledTowns[tid] === true;
+}
+
+function setNavalTownEnabled(enabled, townId) {
+    const tid = townId || getCurrentCityId();
+    navalData.enabledTowns[tid] = enabled;
+    saveData();
+}
 
 const NAVAL_UNITS = ['big_transporter', 'bireme', 'attack_ship', 'demolition_ship', 'small_transporter', 'trireme', 'colonize_ship'];
 const MYTHICAL_SHIPS = ['sea_monster'];
@@ -52,6 +82,97 @@ function getCurrentGod() { try { const ct = uw.ITowns.getCurrentTown(); return c
 function getResearches() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.researches ? ct.researches()?.attributes || {} : {}; } catch(e) { return {}; } }
 function hasResearch(id) { if (!id) return true; const r = getResearches(); return r[id] === true || r[id] === 1; }
 function getUnitsInTown() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.units ? ct.units() : {}; } catch(e) { return {}; } }
+
+function getTownNameById(townId) {
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (town) return town.getName ? town.getName() : town.name;
+    } catch(e) {}
+    return 'Ville ' + townId;
+}
+
+function getResourcesForTown(townId) {
+    try {
+        const town = uw.MM.getModels().Town[townId];
+        return town?.attributes?.resources || { wood: 0, stone: 0, iron: 0 };
+    } catch(e) { return { wood: 0, stone: 0, iron: 0 }; }
+}
+
+function getStorageForTown(townId) {
+    try {
+        const town = uw.MM.getModels().Town[townId];
+        return town?.attributes?.storage || 8000;
+    } catch(e) { return 8000; }
+}
+
+function getUnitsInQueueForTown(townId) {
+    const queued = {};
+    try {
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.UnitOrder) {
+                for (let id in models.UnitOrder) {
+                    const order = models.UnitOrder[id];
+                    const attrs = order.attributes || order;
+                    if (attrs.town_id == townId && attrs.kind === 'naval') {
+                        const unitId = attrs.unit_type;
+                        const count = attrs.units_left || attrs.count || 1;
+                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+    return queued;
+}
+
+function getGlobalUnitsForTown(townId) {
+    const globalUnits = {};
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (!town) return globalUnits;
+        
+        if (typeof town.units === 'function') {
+            const inTown = town.units();
+            for (let unitId in inTown) {
+                if (inTown[unitId] > 0 && (NAVAL_UNITS.includes(unitId) || MYTHICAL_SHIPS.includes(unitId))) {
+                    globalUnits[unitId] = (globalUnits[unitId] || 0) + inTown[unitId];
+                }
+            }
+        }
+        
+        if (typeof town.unitsOuter === 'function') {
+            const outer = town.unitsOuter();
+            if (outer) {
+                for (let unitId in outer) {
+                    if (outer[unitId] > 0 && (NAVAL_UNITS.includes(unitId) || MYTHICAL_SHIPS.includes(unitId))) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outer[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.Movements || models.Commands) {
+                const mvModel = models.Movements || models.Commands;
+                for (let id in mvModel) {
+                    const mv = mvModel[id];
+                    const attrs = mv.attributes || mv;
+                    if ((attrs.origin_town_id == townId || attrs.home_town_id == townId) && attrs.units) {
+                        const units = attrs.units;
+                        for (let unitId in units) {
+                            if (units[unitId] > 0 && (NAVAL_UNITS.includes(unitId) || MYTHICAL_SHIPS.includes(unitId))) {
+                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+    return globalUnits;
+}
 
 function getDocksLevel() {
     try {
@@ -414,10 +535,13 @@ module.render = function(container) {
 module.init = function() {
     loadData();
     
-    document.getElementById('toggle-naval').checked = navalData.enabled;
-    document.getElementById('naval-interval').value = navalData.settings.checkInterval;
-    document.getElementById('naval-mode').value = navalData.settings.recruitMode;
-    document.getElementById('naval-threshold').value = navalData.settings.storageThreshold;
+    const cityId = getCurrentCityId();
+    const settings = getNavalTownSettings(cityId);
+    
+    document.getElementById('toggle-naval').checked = isNavalTownEnabled(cityId);
+    document.getElementById('naval-interval').value = settings.checkInterval;
+    document.getElementById('naval-mode').value = settings.recruitMode;
+    document.getElementById('naval-threshold').value = settings.storageThreshold;
     updateStats();
     updateShipsGrid();
     updateTargetsGrid();
@@ -426,23 +550,23 @@ module.init = function() {
     
     document.getElementById('toggle-naval').onchange = (e) => toggleNaval(e.target.checked);
     document.getElementById('naval-interval').onchange = (e) => {
-        navalData.settings.checkInterval = parseFloat(e.target.value);
-        navalData.nextCheckTime = Date.now() + navalData.settings.checkInterval * 60000;
-        saveData();
+        const cityId = getCurrentCityId();
+        setNavalTownSetting('checkInterval', parseFloat(e.target.value), cityId);
+        navalData.nextCheckTimes[cityId] = Date.now() + getNavalTownSettings(cityId).checkInterval * 60000;
         const val = parseFloat(e.target.value);
         const label = val < 1 ? (val * 60) + ' sec' : val + ' min';
-        log('NAVAL', 'Intervalle: ' + label, 'info');
+        log('NAVAL', 'Intervalle (' + getCurrentTownName() + '): ' + label, 'info');
     };
     document.getElementById('naval-mode').onchange = (e) => {
-        navalData.settings.recruitMode = e.target.value;
-        saveData();
+        const cityId = getCurrentCityId();
+        setNavalTownSetting('recruitMode', e.target.value, cityId);
         const modes = { queue: 'File', loop: 'Boucle', target: 'Objectif' };
-        log('NAVAL', 'Mode: ' + modes[e.target.value], 'info');
+        log('NAVAL', 'Mode (' + getCurrentTownName() + '): ' + modes[e.target.value], 'info');
     };
     document.getElementById('naval-threshold').onchange = (e) => {
-        navalData.settings.storageThreshold = parseInt(e.target.value);
-        saveData();
-        log('NAVAL', 'Seuil entrepot: ' + e.target.value + '%', 'info');
+        const cityId = getCurrentCityId();
+        setNavalTownSetting('storageThreshold', parseInt(e.target.value), cityId);
+        log('NAVAL', 'Seuil (' + getCurrentTownName() + '): ' + e.target.value + '%', 'info');
     };
     document.getElementById('naval-now').onclick = () => runNavalCycle();
     document.getElementById('naval-add-queue').onclick = () => addToQueue();
@@ -462,45 +586,81 @@ module.init = function() {
         };
     });
 
-    if (navalData.enabled) {
-        toggleNaval(true);
-    }
+    startAllEnabledNavalTowns();
 
     setupTownChangeObserver();
     startTimer();
     log('NAVAL', 'Module initialise', 'info');
 };
 
+function startAllEnabledNavalTowns() {
+    for (let townId in navalData.enabledTowns) {
+        if (navalData.enabledTowns[townId]) {
+            const settings = getNavalTownSettings(townId);
+            navalData.nextCheckTimes[townId] = Date.now() + settings.checkInterval * 60000;
+        }
+    }
+}
+
 module.isActive = function() {
-    return navalData.enabled;
+    for (let townId in navalData.enabledTowns) {
+        if (navalData.enabledTowns[townId]) return true;
+    }
+    return false;
 };
 
 module.onActivate = function(container) {
-    setTimeout(function() {
-        updateShipsGrid();
-        updateTargetsGrid();
-        updateQueueDisplay();
-        updatePlansList();
-        updateStats();
-        const nameEl = document.getElementById('naval-city-name');
-        if (nameEl) nameEl.textContent = getCurrentTownName();
-    }, 100);
+    refreshNavalUIForCurrentTown();
 };
 
+function refreshNavalUIForCurrentTown() {
+    const cityId = getCurrentCityId();
+    const settings = getNavalTownSettings(cityId);
+    
+    document.getElementById('toggle-naval').checked = isNavalTownEnabled(cityId);
+    document.getElementById('naval-interval').value = settings.checkInterval;
+    document.getElementById('naval-mode').value = settings.recruitMode;
+    document.getElementById('naval-threshold').value = settings.storageThreshold;
+    
+    updateShipsGrid();
+    updateTargetsGrid();
+    updateQueueDisplay();
+    updatePlansList();
+    updateStats();
+    
+    const nameEl = document.getElementById('naval-city-name');
+    if (nameEl) nameEl.textContent = getCurrentTownName();
+    
+    const ctrl = document.getElementById('naval-control');
+    const status = document.getElementById('naval-status');
+    if (isNavalTownEnabled(cityId)) {
+        ctrl.classList.remove('inactive');
+        status.textContent = 'Actif - ' + getCurrentTownName();
+    } else {
+        ctrl.classList.add('inactive');
+        status.textContent = 'Inactif - ' + getCurrentTownName();
+    }
+}
+
 function toggleNaval(enabled) {
-    navalData.enabled = enabled;
+    const cityId = getCurrentCityId();
+    const cityName = getCurrentTownName();
+    setNavalTownEnabled(enabled, cityId);
+    
     const ctrl = document.getElementById('naval-control');
     const status = document.getElementById('naval-status');
     
     if (enabled) {
         ctrl.classList.remove('inactive');
-        status.textContent = 'Actif';
-        log('NAVAL', 'Bot demarre', 'success');
-        navalData.nextCheckTime = Date.now() + navalData.settings.checkInterval * 60000;
+        status.textContent = 'Actif - ' + cityName;
+        log('NAVAL', 'Bot demarre pour ' + cityName, 'success');
+        const settings = getNavalTownSettings(cityId);
+        navalData.nextCheckTimes[cityId] = Date.now() + settings.checkInterval * 60000;
     } else {
         ctrl.classList.add('inactive');
-        status.textContent = 'En attente';
-        log('NAVAL', 'Bot arrete', 'info');
+        status.textContent = 'Inactif - ' + cityName;
+        log('NAVAL', 'Bot arrete pour ' + cityName, 'info');
+        delete navalData.nextCheckTimes[cityId];
     }
     
     saveData();
@@ -657,18 +817,21 @@ function clearQueue() {
     }
 }
 
-function runNavalCycle() {
-    const mode = navalData.settings.recruitMode;
+function runNavalCycle(townId) {
+    const cityId = townId || getCurrentCityId();
+    const settings = getNavalTownSettings(cityId);
+    const mode = settings.recruitMode;
     
     if (mode === 'target') {
-        runTargetMode();
+        runTargetMode(cityId);
     } else {
-        runQueueMode();
+        runQueueMode(cityId);
     }
 }
 
-function runTargetMode() {
-    const cityId = getCurrentCityId();
+function runTargetMode(townId) {
+    const cityId = townId || getCurrentCityId();
+    const cityName = getTownNameById(cityId);
     
     if (!cityId) {
         log('NAVAL', 'Ville non trouvee', 'error');
@@ -677,23 +840,24 @@ function runTargetMode() {
     
     const targets = navalData.targets[cityId];
     if (!targets || Object.keys(targets).length === 0) {
-        log('NAVAL', 'Aucun objectif defini', 'warning');
+        log('NAVAL', '[' + cityName + '] Aucun objectif defini', 'warning');
         return;
     }
     
-    const res = getResources();
-    const storage = getStorageCapacity();
-    const threshold = navalData.settings.storageThreshold / 100;
+    const res = getResourcesForTown(cityId);
+    const storage = getStorageForTown(cityId);
+    const settings = getNavalTownSettings(cityId);
+    const threshold = settings.storageThreshold / 100;
     const totalRes = res.wood + res.stone + res.iron;
     const fillRate = totalRes / (storage * 3);
     
     if (fillRate < threshold) {
-        log('NAVAL', `Entrepot: ${Math.round(fillRate * 100)}% < ${navalData.settings.storageThreshold}%`, 'info');
+        log('NAVAL', `[${cityName}] Entrepot: ${Math.round(fillRate * 100)}% < ${settings.storageThreshold}%`, 'info');
         return;
     }
     
-    const globalUnits = getGlobalUnits();
-    const unitsInQueue = getUnitsInQueue();
+    const globalUnits = getGlobalUnitsForTown(cityId);
+    const unitsInQueue = getUnitsInQueueForTown(cityId);
     let recruited = false;
     
     for (const unitId in targets) {
@@ -718,19 +882,20 @@ function runTargetMode() {
         const toRecruit = Math.min(needed, maxAffordable);
         if (toRecruit <= 0) continue;
         
-        log('NAVAL', `Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
+        log('NAVAL', `[${cityName}] Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
         recruitShips(cityId, unitId, toRecruit, unitData.name);
         recruited = true;
         break;
     }
     
     if (!recruited) {
-        log('NAVAL', 'Objectifs atteints ou ressources insuffisantes', 'info');
+        log('NAVAL', '[' + cityName + '] Objectifs atteints ou ressources insuffisantes', 'info');
     }
 }
 
-function runQueueMode() {
-    const cityId = getCurrentCityId();
+function runQueueMode(townId) {
+    const cityId = townId || getCurrentCityId();
+    const cityName = getTownNameById(cityId);
     
     if (!cityId) {
         log('NAVAL', 'Ville non trouvee', 'error');
@@ -739,7 +904,7 @@ function runQueueMode() {
     
     const queue = navalData.queues[cityId];
     if (!queue?.length) {
-        log('NAVAL', 'File vide', 'warning');
+        log('NAVAL', '[' + cityName + '] File vide', 'warning');
         return;
     }
     
@@ -754,15 +919,16 @@ function runQueueMode() {
     }
     
     const cost = unitData.resources;
-    const res = getResources();
+    const res = getResourcesForTown(cityId);
     
     if (res.wood < cost.wood * order.count || res.stone < cost.stone * order.count || res.iron < cost.iron * order.count) {
-        log('NAVAL', 'Ressources insuffisantes pour ' + unitData.name, 'warning');
+        log('NAVAL', '[' + cityName + '] Ressources insuffisantes pour ' + unitData.name, 'warning');
         return;
     }
     
+    const settings = getNavalTownSettings(cityId);
     recruitShips(cityId, order.id, order.count, unitData.name, () => {
-        if (navalData.settings.recruitMode === 'loop') {
+        if (settings.recruitMode === 'loop') {
             queue.push(queue.shift());
         } else {
             queue.shift();
@@ -813,6 +979,7 @@ function savePlan() {
     const cityId = getCurrentCityId();
     const queue = navalData.queues[cityId] || [];
     const targets = navalData.targets[cityId] || {};
+    const settings = getNavalTownSettings(cityId);
     
     const plan = {
         name: planName,
@@ -820,8 +987,9 @@ function savePlan() {
         queue: [...queue],
         targets: { ...targets },
         settings: {
-            mode: navalData.settings.recruitMode,
-            threshold: navalData.settings.storageThreshold
+            mode: settings.recruitMode,
+            threshold: settings.storageThreshold,
+            interval: settings.checkInterval
         }
     };
     
@@ -850,16 +1018,22 @@ function loadPlan(index) {
     navalData.targets[cityId] = { ...plan.targets };
     
     if (plan.settings) {
-        navalData.settings.recruitMode = plan.settings.mode || 'queue';
-        navalData.settings.storageThreshold = plan.settings.threshold || 80;
-        document.getElementById('naval-mode').value = navalData.settings.recruitMode;
-        document.getElementById('naval-threshold').value = navalData.settings.storageThreshold;
+        setNavalTownSetting('recruitMode', plan.settings.mode || 'queue', cityId);
+        setNavalTownSetting('storageThreshold', plan.settings.threshold || 80, cityId);
+        if (plan.settings.interval) {
+            setNavalTownSetting('checkInterval', plan.settings.interval, cityId);
+        }
+        
+        const settings = getNavalTownSettings(cityId);
+        document.getElementById('naval-mode').value = settings.recruitMode;
+        document.getElementById('naval-threshold').value = settings.storageThreshold;
+        document.getElementById('naval-interval').value = settings.checkInterval;
     }
     
     saveData();
     updateQueueDisplay();
     updateTargetsGrid();
-    log('NAVAL', `Plan "${plan.name}" charge`, 'success');
+    log('NAVAL', `Plan "${plan.name}" charge pour ${getCurrentTownName()}`, 'success');
 }
 
 function deletePlan(index) {
@@ -1057,11 +1231,7 @@ function setupTownChangeObserver() {
     if (uw.$?.Observer && uw.GameEvents) {
         uw.$.Observer(uw.GameEvents.town.town_switch).subscribe(() => {
             setTimeout(() => {
-                const nameEl = document.getElementById('naval-city-name');
-                if (nameEl) nameEl.textContent = getCurrentTownName();
-                updateShipsGrid();
-                updateTargetsGrid();
-                updateQueueDisplay();
+                refreshNavalUIForCurrentTown();
             }, 500);
         });
     }
@@ -1070,25 +1240,49 @@ function setupTownChangeObserver() {
 function startTimer() {
     setInterval(() => {
         const el = document.getElementById('naval-timer');
+        const cityId = getCurrentCityId();
+        
         if (!el) return;
         
-        if (!navalData.enabled) {
+        if (!isNavalTownEnabled(cityId)) {
             el.textContent = '--:--';
             el.classList.remove('ready');
+            
+            runAllEnabledNavalTowns();
             return;
         }
         
-        const diff = navalData.nextCheckTime - Date.now();
+        const nextCheck = navalData.nextCheckTimes[cityId] || 0;
+        const diff = nextCheck - Date.now();
+        
         if (diff <= 0) {
-            runNavalCycle();
-            navalData.nextCheckTime = Date.now() + navalData.settings.checkInterval * 60000;
+            runNavalCycle(cityId);
+            const settings = getNavalTownSettings(cityId);
+            navalData.nextCheckTimes[cityId] = Date.now() + settings.checkInterval * 60000;
         }
         
         el.classList.remove('ready');
         const m = Math.max(0, Math.floor(diff / 60000)).toString().padStart(2, '0');
         const s = Math.max(0, Math.floor((diff % 60000) / 1000)).toString().padStart(2, '0');
         el.textContent = `${m}:${s}`;
+        
+        runAllEnabledNavalTowns();
     }, 1000);
+}
+
+function runAllEnabledNavalTowns() {
+    const now = Date.now();
+    for (let townId in navalData.enabledTowns) {
+        if (!navalData.enabledTowns[townId]) continue;
+        if (townId == getCurrentCityId()) continue;
+        
+        const nextCheck = navalData.nextCheckTimes[townId] || 0;
+        if (now >= nextCheck) {
+            runNavalCycle(parseInt(townId));
+            const settings = getNavalTownSettings(townId);
+            navalData.nextCheckTimes[townId] = now + settings.checkInterval * 60000;
+        }
+    }
 }
 
 function updateStats() {
@@ -1099,9 +1293,9 @@ function updateStats() {
 }
 
 function saveData() {
-    GM_setValue('gu_naval_data', JSON.stringify({
-        enabled: navalData.enabled,
-        settings: navalData.settings,
+    GM_setValue('gu_naval_data_v2', JSON.stringify({
+        enabledTowns: navalData.enabledTowns,
+        townSettings: navalData.townSettings,
         stats: navalData.stats,
         queues: navalData.queues,
         targets: navalData.targets,
@@ -1110,11 +1304,16 @@ function saveData() {
 }
 
 function loadData() {
-    const saved = GM_getValue('gu_naval_data');
+    const saved = GM_getValue('gu_naval_data_v2');
     if (saved) {
         try {
             const d = JSON.parse(saved);
-            navalData = { ...navalData, ...d };
+            navalData.enabledTowns = d.enabledTowns || {};
+            navalData.townSettings = d.townSettings || {};
+            navalData.stats = d.stats || navalData.stats;
+            navalData.queues = d.queues || {};
+            navalData.targets = d.targets || {};
+            navalData.plans = d.plans || [];
         } catch(e) {}
     }
 }
