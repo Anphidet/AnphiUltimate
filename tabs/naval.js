@@ -143,29 +143,11 @@ function getUnitsInQueue() {
                 for (let id in models.UnitOrder) {
                     const order = models.UnitOrder[id];
                     const attrs = order.attributes || order;
-                    if (attrs.town_id == townId) {
-                        const unitId = attrs.unit_id;
-                        const unitData = uw.GameData.units[unitId];
-                        if (unitData && unitData.is_naval) {
-                            const count = attrs.units_left || attrs.count || 1;
-                            if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (Object.keys(queued).length === 0) {
-            const ct = uw.ITowns.getCurrentTown();
-            if (ct && typeof ct.docksOrders === 'function') {
-                const orders = ct.docksOrders();
-                if (orders && orders.models) {
-                    orders.models.forEach(order => {
-                        const attrs = order.attributes || order;
-                        const unitId = attrs.unit_id;
+                    if (attrs.town_id == townId && attrs.kind === 'naval') {
+                        const unitId = attrs.unit_type;
                         const count = attrs.units_left || attrs.count || 1;
                         if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
-                    });
+                    }
                 }
             }
         }
