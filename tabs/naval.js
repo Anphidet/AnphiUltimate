@@ -58,11 +58,20 @@ function getDocksLevel() {
         const ct = uw.ITowns.getCurrentTown();
         if (ct && ct.buildings) {
             const buildings = ct.buildings();
-            return buildings?.docks || 0;
+            if (buildings && typeof buildings.docks !== 'undefined') {
+                return buildings.docks;
+            }
         }
         const town = getCurrentTown();
-        return town?.attributes?.buildings?.docks || 0;
-    } catch(e) { return 0; }
+        if (town?.attributes?.buildings && typeof town.attributes.buildings.docks !== 'undefined') {
+            return town.attributes.buildings.docks;
+        }
+        return -1;
+    } catch(e) { return -1; }
+}
+
+function hasPort() {
+    return getDocksLevel() >= 0;
 }
 
 function isShipAvailable(unitId) {
@@ -125,7 +134,7 @@ module.render = function(container) {
             <span style="font-size:22px;">⚓</span>
             <div>
                 <span id="naval-city-name" style="font-family:Cinzel,serif;font-size:15px;color:#F5DEB3;">${getCurrentTownName()}</span>
-                <div style="font-size:11px;color:#8B8B83;">Port niveau <span id="naval-docks-level">${getDocksLevel()}</span></div>
+                <div style="font-size:11px;color:#8B8B83;"><span id="naval-docks-label">Port niveau</span> <span id="naval-docks-level">${getDocksLevel() >= 0 ? getDocksLevel() : 'Aucun'}</span></div>
             </div>
         </div>
         <div class="bot-section">
@@ -322,7 +331,8 @@ module.onActivate = function(container) {
     const nameEl = document.getElementById('naval-city-name');
     if (nameEl) nameEl.textContent = getCurrentTownName();
     const docksEl = document.getElementById('naval-docks-level');
-    if (docksEl) docksEl.textContent = getDocksLevel();
+    const docksLevel = getDocksLevel();
+    if (docksEl) docksEl.textContent = docksLevel >= 0 ? docksLevel : 'Aucun';
 };
 
 function toggleNaval(enabled) {
@@ -351,9 +361,16 @@ function updateShipsGrid() {
     const grid = document.getElementById('naval-units-grid');
     if (!grid) return;
     
+    const docksLevel = getDocksLevel();
+    
+    if (docksLevel < 0) {
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#E53935;font-style:italic;padding:20px;">Pas de port dans cette ville</div>';
+        return;
+    }
+    
     const ships = getAvailableShips();
     if (!ships.length) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible (port requis)</div>';
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#FF9800;font-style:italic;padding:20px;">Port niveau ' + docksLevel + ' - Ameliorez le port pour debloquer des bateaux</div>';
         return;
     }
     
@@ -370,13 +387,19 @@ function updateTargetsGrid() {
     const grid = document.getElementById('naval-targets-grid');
     if (!grid) return;
     
+    const docksLevel = getDocksLevel();
     const ships = getAvailableShips();
     const cityId = getCurrentCityId();
     const targets = navalData.targets[cityId] || {};
     const unitsInTown = getUnitsInTown();
     
+    if (docksLevel < 0) {
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#E53935;font-style:italic;padding:20px;">Pas de port dans cette ville</div>';
+        return;
+    }
+    
     if (!ships.length) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#FF9800;font-style:italic;padding:20px;">Port niveau ' + docksLevel + ' - Ameliorez le port pour debloquer des bateaux</div>';
         return;
     }
     
@@ -777,7 +800,8 @@ function setupTownChangeObserver() {
                 const nameEl = document.getElementById('naval-city-name');
                 if (nameEl) nameEl.textContent = getCurrentTownName();
                 const docksEl = document.getElementById('naval-docks-level');
-                if (docksEl) docksEl.textContent = getDocksLevel();
+                const docksLevel = getDocksLevel();
+                if (docksEl) docksEl.textContent = docksLevel >= 0 ? docksLevel : 'Aucun';
                 updateShipsGrid();
                 updateTargetsGrid();
                 updateQueueDisplay();
