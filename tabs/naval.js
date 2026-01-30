@@ -692,13 +692,16 @@ function runTargetMode() {
         return;
     }
     
-    const unitsInTown = getUnitsInTown();
+    const globalUnits = getGlobalUnits();
+    const unitsInQueue = getUnitsInQueue();
     let recruited = false;
     
     for (const unitId in targets) {
         const targetCount = targets[unitId];
-        const currentCount = unitsInTown[unitId] || 0;
-        const needed = targetCount - currentCount;
+        const totalGlobal = globalUnits[unitId] || 0;
+        const queued = unitsInQueue[unitId] || 0;
+        const grandTotal = totalGlobal + queued;
+        const needed = targetCount - grandTotal;
         
         if (needed <= 0) continue;
         
@@ -715,6 +718,7 @@ function runTargetMode() {
         const toRecruit = Math.min(needed, maxAffordable);
         if (toRecruit <= 0) continue;
         
+        log('NAVAL', `Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
         recruitShips(cityId, unitId, toRecruit, unitData.name);
         recruited = true;
         break;
