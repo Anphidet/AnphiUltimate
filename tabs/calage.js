@@ -18,6 +18,12 @@ let calageData = {
     settings: { webhook: '' }
 };
 
+let notifId = 0;
+let notifsContainer = null;
+let dernieresNotifs = {};
+let dernierLogCheck = 0;
+let calculEnCours = {};
+
 const GROUND_UNITS = ['sword', 'slinger', 'archer', 'hoplite', 'rider', 'chariot', 'catapult', 'minotaur', 'manticore', 'centaur', 'pegasus', 'harpy', 'medusa', 'zyklop', 'cerberus', 'fury', 'griffin', 'calydonian_boar', 'godsent', 'satyr', 'spartoi', 'ladon', 'siren'];
 const NAVAL_UNITS = ['big_transporter', 'bireme', 'attack_ship', 'demolition_ship', 'small_transporter', 'trireme', 'colonize_ship', 'sea_monster'];
 const TRANSPORT_SHIPS = ['big_transporter', 'small_transporter'];
@@ -495,12 +501,119 @@ module.render = function(container) {
                 cursor: pointer;
                 border: none;
             }
+            
+            #calage-notifs {
+                position: fixed;
+                bottom: 80px;
+                left: 15px;
+                z-index: 99999;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                max-width: 350px;
+                pointer-events: auto;
+            }
+            .calage-notif {
+                background: linear-gradient(135deg, rgba(45,34,23,0.95), rgba(30,23,15,0.95));
+                border: 2px solid #D4AF37;
+                border-radius: 10px;
+                padding: 12px 15px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+                cursor: pointer;
+                animation: calageSlideIn 0.3s ease;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-family: 'Philosopher', Georgia, serif;
+            }
+            .calage-notif:hover { border-color: #FFD700; transform: scale(1.02); }
+            .calage-notif.warning { border-color: #ffc107; background: linear-gradient(135deg, rgba(60,50,20,0.95), rgba(40,35,15,0.95)); }
+            .calage-notif.success { border-color: #4CAF50; background: linear-gradient(135deg, rgba(30,50,30,0.95), rgba(20,40,20,0.95)); }
+            .calage-notif.info { border-color: #2196F3; background: linear-gradient(135deg, rgba(20,35,50,0.95), rgba(15,25,40,0.95)); }
+            .calage-notif.attack { border-color: #E53935; background: linear-gradient(135deg, rgba(50,20,20,0.95), rgba(40,15,15,0.95)); }
+            .calage-notif-icon { font-size: 20px; }
+            .calage-notif-content { flex: 1; }
+            .calage-notif-title { font-weight: bold; font-size: 13px; color: #F5DEB3; }
+            .calage-notif-text { font-size: 11px; color: #BDB76B; margin-top: 3px; }
+            .calage-notif-time { font-size: 10px; color: #D4AF37; }
+            @keyframes calageSlideIn {
+                from { transform: translateX(-100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes calageSlideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(-100%); opacity: 0; }
+            }
         </style>
     `;
 };
 
+function initNotifications() {
+    if (notifsContainer) return;
+    
+    notifsContainer = document.createElement('div');
+    notifsContainer.id = 'calage-notifs';
+    document.body.appendChild(notifsContainer);
+}
+
+function afficherNotification(titre, texte, type, duree) {
+    if (!notifsContainer) initNotifications();
+    
+    type = type || 'info';
+    duree = duree || 10000;
+    
+    const id = ++notifId;
+    const icons = {
+        info: 'ℹ️',
+        warning: '⚠️',
+        success: '✅',
+        attack: '⚔️'
+    };
+    
+    const notif = document.createElement('div');
+    notif.className = 'calage-notif ' + type;
+    notif.setAttribute('data-id', id);
+    notif.innerHTML = `
+        <div class="calage-notif-icon">${icons[type] || '📢'}</div>
+        <div class="calage-notif-content">
+            <div class="calage-notif-title">${titre}</div>
+            <div class="calage-notif-text">${texte}</div>
+        </div>
+        <div class="calage-notif-time">${formatTime(Date.now())}</div>
+    `;
+    
+    notif.addEventListener('click', function() {
+        fermerNotification(id);
+    });
+    
+    notifsContainer.appendChild(notif);
+    
+    log('CALAGE', `[NOTIF] ${titre}: ${texte}`, type === 'success' ? 'success' : (type === 'warning' ? 'warning' : 'info'));
+    
+    setTimeout(function() {
+        fermerNotification(id);
+    }, duree);
+    
+    return id;
+}
+
+function fermerNotification(id) {
+    if (!notifsContainer) return;
+    
+    const notif = notifsContainer.querySelector('[data-id="' + id + '"]');
+    if (notif) {
+        notif.style.animation = 'calageSlideOut 0.3s ease forwards';
+        setTimeout(function() {
+            if (notif.parentNode) {
+                notif.parentNode.removeChild(notif);
+            }
+        }, 300);
+    }
+}
+
 module.init = function() {
     loadData();
+    initNotifications();
 
     document.getElementById('toggle-calage').checked = calageData.botActif;
     updateControlState();
@@ -582,8 +695,18 @@ function updateControlState() {
 }
 
 function demarrerBot() {
+    console.log('[CALAGE] ========================================');
+    console.log('[CALAGE] BOT DEMARRE !');
+    console.log('[CALAGE] Attaques en memoire:', calageData.attaques.length);
+    const attaquesEnAttente = calageData.attaques.filter(a => a.status === 'attente').length;
+    console.log('[CALAGE] Attaques en attente:', attaquesEnAttente);
+    console.log('[CALAGE] Intervalle de verification: 500ms');
+    console.log('[CALAGE] ========================================');
+    
     log('CALAGE', 'Bot demarre', 'success');
     majStatus('Surveillance...');
+    
+    afficherNotification('Bot demarre', 'Surveillance de ' + calageData.attaques.length + ' attaque(s)', 'info');
 
     calageData.intervalCheck = setInterval(function() {
         if (!calageData.botActif) return;
@@ -592,6 +715,10 @@ function demarrerBot() {
 }
 
 function arreterBot() {
+    console.log('[CALAGE] ========================================');
+    console.log('[CALAGE] BOT ARRETE !');
+    console.log('[CALAGE] ========================================');
+    
     log('CALAGE', 'Bot arrete', 'info');
     majStatus('En attente');
 
@@ -600,6 +727,7 @@ function arreterBot() {
         calageData.intervalCheck = null;
     }
     calageData.attaqueEnCours = null;
+    dernieresNotifs = {};
 }
 
 function majStatus(message) {
@@ -1313,35 +1441,220 @@ function lancerAttaqueMaintenant(index) {
 }
 
 function verifierEtLancerAttaque() {
-    if (calageData.attaqueEnCours) return;
+    if (calageData.attaqueEnCours) {
+        return;
+    }
 
     const maintenant = Date.now();
+    let attaqueALancer = null;
+    
+    const doLog = (maintenant - dernierLogCheck) >= 10000;
+    if (doLog) {
+        dernierLogCheck = maintenant;
+        console.log('[CALAGE] [CHECK] Verification des attaques a', formatTime(maintenant));
+    }
 
     for (let i = 0; i < calageData.attaques.length; i++) {
         const atk = calageData.attaques[i];
 
-        if (atk.status === 'attente' && atk.heureEnvoi) {
-            let heureEnvoiMs = getTimeInMs(atk.heureEnvoi);
-            let tempsRestant = heureEnvoiMs - maintenant;
-
-            if (tempsRestant < -60000) {
-                tempsRestant += 24 * 60 * 60 * 1000;
+        if (atk.status !== 'attente') continue;
+        
+        const heureArriveeMs = getTimeInMs(atk.heureArrivee);
+        let tempsAvantArrivee = heureArriveeMs - maintenant;
+        
+        if (tempsAvantArrivee < -60000) {
+            tempsAvantArrivee += 24 * 60 * 60 * 1000;
+        }
+        
+        const notifKey = 'atk_' + atk.id;
+        
+        if (!atk.travelTime && !calculEnCours[atk.id]) {
+            if (tempsAvantArrivee > 0 && tempsAvantArrivee < 2 * 60 * 60 * 1000) {
+                console.log('[CALAGE] [CHECK] Calcul du temps de trajet necessaire pour:', atk.sourceId, '->', atk.cibleId);
+                calculEnCours[atk.id] = true;
+                
+                calculerTempsTrajetPourAttaque(atk).then(function(tempsTrajetMs) {
+                    if (tempsTrajetMs) {
+                        atk.travelTime = tempsTrajetMs;
+                        const heureEnvoiMs = heureArriveeMs - tempsTrajetMs;
+                        atk.heureEnvoi = formatTime(heureEnvoiMs);
+                        saveData();
+                        majListeAttaques();
+                        
+                        console.log('[CALAGE] [CALCUL] Temps de trajet sauvegarde:', Math.round(tempsTrajetMs/1000), 's');
+                        console.log('[CALAGE] [CALCUL] Heure de depart calculee:', atk.heureEnvoi);
+                        
+                        afficherNotification(
+                            'Temps de trajet calcule',
+                            atk.sourceId + ' -> ' + atk.cibleId + ': ' + formatDuration(tempsTrajetMs) + ' | Depart: ' + atk.heureEnvoi,
+                            'info'
+                        );
+                    }
+                    delete calculEnCours[atk.id];
+                }).catch(function(err) {
+                    console.error('[CALAGE] [CALCUL] Erreur calcul temps trajet:', err);
+                    delete calculEnCours[atk.id];
+                });
             }
-
-            const minutesRestantes = Math.floor(tempsRestant / 60000);
-            const secondesRestantes = Math.floor((tempsRestant % 60000) / 1000);
-
-            if (tempsRestant > 0 && tempsRestant < 120000) {
-                majStatus('Envoi dans ' + minutesRestantes + 'm ' + secondesRestantes + 's');
-            }
-
-            if (tempsRestant > 0 && tempsRestant < AVANCE_LANCEMENT) {
-                log('CALAGE', 'Lancement auto (T-' + Math.round(tempsRestant/1000) + 's avant envoi)', 'info');
-                lancerAttaque(atk);
-                return;
+            continue;
+        }
+        
+        if (!atk.heureEnvoi || !atk.travelTime) continue;
+        
+        let heureEnvoiMs = getTimeInMs(atk.heureEnvoi);
+        let tempsAvantDepart = heureEnvoiMs - maintenant;
+        
+        if (tempsAvantDepart < -60000) {
+            tempsAvantDepart += 24 * 60 * 60 * 1000;
+        }
+        
+        const minDepart = Math.floor(tempsAvantDepart / 60000);
+        const secDepart = Math.floor((tempsAvantDepart % 60000) / 1000);
+        
+        if (doLog && tempsAvantDepart > 0 && tempsAvantDepart < 2 * 60 * 60 * 1000) {
+            console.log('[CALAGE] [CHECK] Attaque:', atk.sourceId, '->', atk.cibleId);
+            console.log('[CALAGE] [CHECK]   Heure ARRIVEE souhaitee:', atk.heureArrivee);
+            console.log('[CALAGE] [CHECK]   Heure DEPART calculee:', atk.heureEnvoi);
+            console.log('[CALAGE] [CHECK]   Temps de trajet:', formatDuration(atk.travelTime));
+            console.log('[CALAGE] [CHECK]   Temps avant DEPART:', minDepart + 'm ' + secDepart + 's');
+        }
+        
+        if (tempsAvantDepart > 0 && tempsAvantDepart < 120000) {
+            majStatus('Envoi dans ' + minDepart + 'm ' + secDepart + 's (arr: ' + atk.heureArrivee + ')');
+        }
+        
+        const alertes = [
+            { temps: 60, msg: '1 heure' },
+            { temps: 30, msg: '30 minutes' },
+            { temps: 15, msg: '15 minutes' },
+            { temps: 10, msg: '10 minutes' },
+            { temps: 5, msg: '5 minutes' }
+        ];
+        
+        for (let j = 0; j < alertes.length; j++) {
+            const alerte = alertes[j];
+            const key = notifKey + '_' + alerte.temps;
+            if (minDepart === alerte.temps && !dernieresNotifs[key]) {
+                dernieresNotifs[key] = true;
+                console.log('[CALAGE] [NOTIF] Alerte:', alerte.msg, 'avant le depart', atk.sourceId, '->', atk.cibleId);
+                afficherNotification(
+                    'Depart dans ' + alerte.msg,
+                    atk.sourceId + ' -> ' + atk.cibleId + ' | Arrivee ' + atk.heureArrivee,
+                    'warning'
+                );
             }
         }
+
+        if (tempsAvantDepart > 0 && tempsAvantDepart < AVANCE_LANCEMENT) {
+            console.log('[CALAGE] [TRIGGER] Temps avant depart < 15s (' + tempsAvantDepart + 'ms) - Declenchement !');
+            attaqueALancer = atk;
+            break;
+        }
     }
+    
+    if (attaqueALancer) {
+        console.log('[CALAGE] ========================================');
+        console.log('[CALAGE] [LANCEMENT] Attaque trouvee a lancer !');
+        console.log('[CALAGE] [LANCEMENT] Source:', attaqueALancer.sourceId);
+        console.log('[CALAGE] [LANCEMENT] Cible:', attaqueALancer.cibleId);
+        console.log('[CALAGE] [LANCEMENT] Heure depart:', attaqueALancer.heureEnvoi);
+        console.log('[CALAGE] [LANCEMENT] Heure arrivee:', attaqueALancer.heureArrivee);
+        console.log('[CALAGE] ========================================');
+        
+        afficherNotification(
+            'Calage automatique',
+            attaqueALancer.sourceId + ' -> ' + attaqueALancer.cibleId + ' - Lancement !',
+            'attack'
+        );
+        
+        lancerAttaque(attaqueALancer);
+    }
+}
+
+function calculerTempsTrajetPourAttaque(atk) {
+    return new Promise(function(resolve, reject) {
+        const townId = atk.sourceId;
+        const csrfToken = uw.Game.csrfToken;
+        const url = '/game/town_info?town_id=' + townId + '&action=send_units&h=' + csrfToken;
+        
+        const jsonData = {
+            id: atk.cibleId,
+            type: atk.type,
+            town_id: townId,
+            nl_init: true
+        };
+        
+        for (const unitId in atk.unites) {
+            if (atk.unites.hasOwnProperty(unitId)) {
+                jsonData[unitId] = atk.unites[unitId];
+            }
+        }
+        
+        console.log('[CALAGE] [CALCUL] Envoi test pour calculer temps de trajet...');
+        
+        uw.$.ajax({
+            url: url,
+            type: 'POST',
+            data: { json: JSON.stringify(jsonData) },
+            dataType: 'json',
+            success: function(response) {
+                if (response.json && response.json.error) {
+                    console.error('[CALAGE] [CALCUL] Erreur:', response.json.error);
+                    reject(response.json.error);
+                    return;
+                }
+                
+                const notifs = response.json && response.json.notifications;
+                if (!notifs) {
+                    reject('Pas de notifications');
+                    return;
+                }
+                
+                let mvIndex = -1;
+                for (let i = 0; i < notifs.length; i++) {
+                    if (notifs[i].subject === 'MovementsUnits') {
+                        mvIndex = i;
+                        break;
+                    }
+                }
+                
+                if (mvIndex === -1) {
+                    reject('Pas de MovementsUnits');
+                    return;
+                }
+                
+                try {
+                    const paramStr = notifs[mvIndex].param_str;
+                    const movementData = JSON.parse(paramStr).MovementsUnits;
+                    const arrivalAt = movementData.arrival_at;
+                    const commandId = movementData.command_id;
+                    
+                    const now = Math.floor(Date.now() / 1000);
+                    const travelTimeSec = arrivalAt - now;
+                    const travelTimeMs = travelTimeSec * 1000;
+                    
+                    console.log('[CALAGE] [CALCUL] Temps de trajet calcule:', travelTimeSec, 'secondes');
+                    console.log('[CALAGE] [CALCUL] Annulation de la commande test...');
+                    
+                    annulerCommande(commandId).then(function() {
+                        console.log('[CALAGE] [CALCUL] Commande test annulee');
+                        resolve(travelTimeMs);
+                    }).catch(function(err) {
+                        console.error('[CALAGE] [CALCUL] Erreur annulation:', err);
+                        resolve(travelTimeMs);
+                    });
+                    
+                } catch (e) {
+                    console.error('[CALAGE] [CALCUL] Erreur parsing:', e);
+                    reject(e);
+                }
+            },
+            error: function(xhr, status, err) {
+                console.error('[CALAGE] [CALCUL] Erreur AJAX:', err);
+                reject(err);
+            }
+        });
+    });
 }
 
 function lancerAttaque(atk) {
@@ -1351,8 +1664,15 @@ function lancerAttaque(atk) {
     saveData();
     majListeAttaques();
     majStatus('Envoi vers ' + atk.cibleId + '...');
+    
+    console.log('[CALAGE] [ATTAQUE] === LANCEMENT ATTAQUE ===');
+    console.log('[CALAGE] [ATTAQUE] Source:', atk.sourceId, '-> Cible:', atk.cibleId);
+    console.log('[CALAGE] [ATTAQUE] Type:', atk.type);
+    console.log('[CALAGE] [ATTAQUE] Unites:', JSON.stringify(atk.unites));
+    console.log('[CALAGE] [ATTAQUE] Tolerance: [', atk.toleranceMoins ? '-1s' : '0', ',', atk.tolerancePlus ? '+1s' : '0', ']');
 
     if (uw.Game.townId !== atk.sourceId) {
+        console.log('[CALAGE] [ATTAQUE] Changement de ville necessaire:', uw.Game.townId, '->', atk.sourceId);
         log('CALAGE', 'Changement ville: ' + uw.Game.townId + ' -> ' + atk.sourceId, 'info');
         majStatus('Changement ville...');
 
@@ -1362,7 +1682,9 @@ function lancerAttaque(atk) {
             } else if (uw.ITowns && uw.ITowns.setCurrentTown) {
                 uw.ITowns.setCurrentTown(atk.sourceId);
             }
+            console.log('[CALAGE] [ATTAQUE] Changement de ville effectue');
         } catch (e) {
+            console.error('[CALAGE] [ATTAQUE] Erreur changement ville:', e);
             log('CALAGE', 'Erreur changement: ' + e.message, 'error');
         }
 
@@ -1372,6 +1694,7 @@ function lancerAttaque(atk) {
         return;
     }
 
+    console.log('[CALAGE] [ATTAQUE] Ville source deja active, envoi direct');
     envoyerAttaque(atk);
 }
 
@@ -1393,6 +1716,7 @@ function envoyerAttaque(atk) {
         }
     }
 
+    console.log('[CALAGE] [ENVOI] Tentative #' + atk.tentatives);
     majStatus('Tentative #' + atk.tentatives + '...');
 
     uw.$.ajax({
@@ -1401,15 +1725,18 @@ function envoyerAttaque(atk) {
         data: { json: JSON.stringify(jsonData) },
         dataType: 'json',
         success: function(response) {
+            console.log('[CALAGE] [ENVOI] Reponse recue');
             traiterReponseAttaque(response, atk);
         },
         error: function(xhr, status, err) {
+            console.error('[CALAGE] [ENVOI] Erreur AJAX:', err);
             log('CALAGE', 'Erreur AJAX: ' + err, 'error');
             majStatus('Erreur: ' + err);
 
             setTimeout(function() {
                 if (calageData.attaqueEnCours === atk) {
                     atk.tentatives++;
+                    console.log('[CALAGE] [ENVOI] Retry apres erreur, tentative #' + atk.tentatives);
                     envoyerAttaque(atk);
                 }
             }, 1000);
@@ -1418,8 +1745,12 @@ function envoyerAttaque(atk) {
 }
 
 function traiterReponseAttaque(response, atk) {
+    console.log('[CALAGE] [REPONSE] Traitement de la reponse...');
+    
     if (response.json && response.json.error) {
+        console.log('[CALAGE] [REPONSE] Erreur serveur:', response.json.error);
         if (response.json.error.indexOf('unit') !== -1 || response.json.error.indexOf('Pas assez') !== -1) {
+            console.log('[CALAGE] [REPONSE] Pas assez d\'unites, retry dans 500ms...');
             majStatus('Attente unites...');
             setTimeout(function() {
                 if (calageData.attaqueEnCours === atk) {
@@ -1437,6 +1768,7 @@ function traiterReponseAttaque(response, atk) {
 
     const notifs = response.json && response.json.notifications;
     if (!notifs) {
+        console.log('[CALAGE] [REPONSE] Pas de notifications dans la reponse');
         log('CALAGE', 'Pas de notifications', 'error');
         calageData.attaqueEnCours = null;
         return;
@@ -1451,6 +1783,7 @@ function traiterReponseAttaque(response, atk) {
     }
 
     if (mvIndex === -1) {
+        console.log('[CALAGE] [REPONSE] Pas de MovementsUnits trouve');
         log('CALAGE', 'Pas de MovementsUnits', 'error');
         calageData.attaqueEnCours = null;
         return;
@@ -1462,6 +1795,10 @@ function traiterReponseAttaque(response, atk) {
         const arrivalAt = movementData.arrival_at;
         const commandId = movementData.command_id;
 
+        console.log('[CALAGE] [REPONSE] MovementsUnits trouve:');
+        console.log('[CALAGE] [REPONSE]   command_id:', commandId);
+        console.log('[CALAGE] [REPONSE]   arrival_at:', arrivalAt, '(', formatTime(arrivalAt * 1000), ')');
+
         const calageMs = getTimeInMs(atk.heureArrivee);
         const arrivalMs = arrivalAt * 1000;
         const diff = arrivalMs - calageMs;
@@ -1472,50 +1809,75 @@ function traiterReponseAttaque(response, atk) {
         const diffSec = Math.round(diff / 1000);
         const signe = diffSec > 0 ? '+' : '';
 
+        console.log('[CALAGE] [REPONSE] Heure cible:', atk.heureArrivee, '(', calageMs, 'ms)');
+        console.log('[CALAGE] [REPONSE] Heure arrivee:', formatTime(arrivalMs), '(', arrivalMs, 'ms)');
+        console.log('[CALAGE] [REPONSE] Difference:', signe + diffSec + 's');
+        console.log('[CALAGE] [REPONSE] Tolerance: [', toleranceMin/1000, 's,', toleranceMax/1000, 's ]');
+
         if (diff >= toleranceMin && diff <= toleranceMax) {
+            console.log('[CALAGE] [SUCCES] ========================================');
+            console.log('[CALAGE] [SUCCES] CALAGE REUSSI !');
+            console.log('[CALAGE] [SUCCES] Tentatives:', atk.tentatives);
+            console.log('[CALAGE] [SUCCES] Arrivee:', formatTime(arrivalMs));
+            console.log('[CALAGE] [SUCCES] ========================================');
+            
             log('CALAGE', 'SUCCES! Arrivee: ' + formatTime(arrivalMs) + ' (' + atk.tentatives + ' essais)', 'success');
             atk.status = 'succes';
             saveData();
             majListeAttaques();
             majStatus('SUCCES! ' + formatTime(arrivalMs));
             calageData.attaqueEnCours = null;
+            
+            afficherNotification(
+                'Calage reussi !',
+                atk.sourceId + ' -> ' + atk.cibleId + ' | Arrivee: ' + formatTime(arrivalMs) + ' (' + atk.tentatives + ' essais)',
+                'success'
+            );
 
             sendWebhook('Calage Reussi!', 
                 `**${atk.sourceId} -> ${atk.cibleId}**\nArrivee: ${formatTime(arrivalMs)}\nTentatives: ${atk.tentatives}`);
             return;
         }
 
+        console.log('[CALAGE] [CALAGE] Hors tolerance (' + signe + diffSec + 's), annulation...');
         log('CALAGE', 'Hors tolerance (' + signe + diffSec + 's), annulation...', 'warning');
         majStatus('Calage ' + signe + diffSec + 's - Retry...');
 
         annulerCommande(commandId).then(function() {
+            console.log('[CALAGE] [ANNULATION] Commande annulee avec succes');
             atk.tentatives++;
             saveData();
             majListeAttaques();
 
+            console.log('[CALAGE] [ATTENTE] Attente retour des troupes...');
             majStatus('Attente troupes... (#' + atk.tentatives + ')');
 
             verifierTroupesRevenues(atk.unites).then(function() {
+                console.log('[CALAGE] [ATTENTE] Troupes revenues, renvoi !');
                 envoyerAttaque(atk);
             }).catch(function() {
+                console.log('[CALAGE] [ATTENTE] Timeout troupes, renvoi quand meme...');
                 setTimeout(function() {
                     envoyerAttaque(atk);
                 }, 1500);
             });
 
         }).catch(function(err) {
+            console.error('[CALAGE] [ANNULATION] Erreur:', err);
             log('CALAGE', 'Erreur annulation: ' + err, 'error');
             majStatus('Erreur annulation');
             calageData.attaqueEnCours = null;
         });
 
     } catch (e) {
+        console.error('[CALAGE] [REPONSE] Erreur parsing:', e);
         log('CALAGE', 'Erreur parsing: ' + e.message, 'error');
         calageData.attaqueEnCours = null;
     }
 }
 
 function annulerCommande(commandId) {
+    console.log('[CALAGE] [ANNULATION] Annulation de la commande:', commandId);
     return new Promise(function(resolve, reject) {
         const townId = uw.Game.townId;
         const csrfToken = uw.Game.csrfToken;
@@ -1538,9 +1900,11 @@ function annulerCommande(commandId) {
             type: 'POST',
             data: { json: jsonPayload },
             success: function(response) {
+                console.log('[CALAGE] [ANNULATION] Reponse OK');
                 resolve(response);
             },
             error: function(xhr, status, error) {
+                console.error('[CALAGE] [ANNULATION] Erreur:', error);
                 reject(error);
             }
         });
@@ -1548,6 +1912,7 @@ function annulerCommande(commandId) {
 }
 
 function verifierTroupesRevenues(unitesEnvoyees) {
+    console.log('[CALAGE] [TROUPES] Verification retour des troupes');
     return new Promise(function(resolve, reject) {
         const startTime = Date.now();
         let checkCount = 0;
@@ -1556,6 +1921,7 @@ function verifierTroupesRevenues(unitesEnvoyees) {
             checkCount++;
 
             if (Date.now() - startTime > TIMEOUT_VERIFICATION) {
+                console.log('[CALAGE] [TROUPES] Timeout apres', checkCount, 'verifications');
                 clearInterval(interval);
                 reject('Timeout');
                 return;
@@ -1582,6 +1948,7 @@ function verifierTroupesRevenues(unitesEnvoyees) {
                         }
 
                         if (toutesRevenues) {
+                            console.log('[CALAGE] [TROUPES] Troupes revenues apres', checkCount, 'verifications');
                             clearInterval(interval);
                             resolve(true);
                             return;
