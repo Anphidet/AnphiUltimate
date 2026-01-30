@@ -7,18 +7,20 @@
     const VERSION = '2.2.0';
     
     const TABS_CONFIG = [
+        { id: 'info', name: 'Info', icon: '📢', script: 'tabs/info.js' },
         { id: 'farm', name: 'Farm', icon: '🌾', script: 'tabs/farm.js' },
         { id: 'build', name: 'Build', icon: '🏗️', script: 'tabs/build.js' },
         { id: 'recruit', name: 'Recruit', icon: '⚔️', script: 'tabs/recruit.js' },
         { id: 'naval', name: 'Naval', icon: '⚓', script: 'tabs/naval.js' },
         { id: 'calage', name: 'Calage', icon: '⏱️', script: 'tabs/calage.js' },
+        { id: 'commerce', name: 'Commerce', icon: '🏪', script: 'tabs/commerce.js' },
         { id: 'dodge', name: 'Dodge', icon: '🛡️', script: 'tabs/dodge.js', disabled: true },
         { id: 'settings', name: 'Parametres', icon: '⚙️', script: 'tabs/settings.js' }
     ];
 
     var uw = (typeof unsafeWindow == 'undefined') ? window : unsafeWindow;
     const loadedTabs = {};
-    let currentTab = 'farm';
+    let currentTab = 'info';
     let panelOpen = false;
     let logs = [];
     let userAccess = null;
@@ -36,8 +38,9 @@
         @keyframes pulse-active{0%,100%{box-shadow:0 0 5px #4CAF50}50%{box-shadow:0 0 15px #4CAF50,0 0 25px #4CAF50}}
         .ultimate-panel{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:750px;max-height:85vh;background:linear-gradient(180deg,rgba(62,47,32,0.98) 0%,rgba(45,34,23,0.98) 50%,rgba(30,23,15,0.98) 100%);border:3px solid #D4AF37;border-radius:12px;box-shadow:0 15px 50px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,215,0,0.2);z-index:100000;font-family:'Philosopher',Georgia,serif;overflow:hidden}
         .ultimate-panel.open{display:flex;flex-direction:column;animation:panel-appear 0.3s ease-out}
+        .ultimate-panel.dragging{transition:none !important}
         @keyframes panel-appear{from{opacity:0;transform:translate(-50%,-50%) scale(0.9)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
-        .ultimate-header{background:linear-gradient(180deg,#5D4E37 0%,#3D3225 100%);padding:15px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #D4AF37}
+        .ultimate-header{background:linear-gradient(180deg,#5D4E37 0%,#3D3225 100%);padding:15px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #D4AF37;cursor:move;user-select:none}
         .ultimate-title{font-family:'Cinzel',serif;font-size:20px;font-weight:700;color:#F5DEB3;text-shadow:0 2px 4px rgba(0,0,0,0.5);display:flex;align-items:center;gap:10px}
         .ultimate-version{font-size:11px;color:#D4AF37;background:rgba(0,0,0,0.3);padding:3px 8px;border-radius:4px}
         .ultimate-close{width:32px;height:32px;border-radius:50%;background:linear-gradient(145deg,#8B4513,#5D3A1A);border:2px solid #D4AF37;color:#F5DEB3;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:all 0.2s}
@@ -280,7 +283,7 @@
         
         const tabsHtml = TABS_CONFIG.map(tab => {
             let classes = 'ultimate-tab';
-            if (tab.id === 'farm') classes += ' active';
+            if (tab.id === 'info') classes += ' active';
             if (tab.disabled) classes += ' disabled';
             else if (!isModuleAllowed(tab.id) && tab.id !== 'settings') classes += ' locked';
             
@@ -290,7 +293,7 @@
         }).join('');
 
         const contentsHtml = TABS_CONFIG.map(tab => 
-            `<div class="tab-content${tab.id === 'farm' ? ' active' : ''}" id="tab-${tab.id}">
+            `<div class="tab-content${tab.id === 'info' ? ' active' : ''}" id="tab-${tab.id}">
                 <div class="gu-loading"><div class="gu-loading-spinner">⏳</div>Chargement...</div>
             </div>`
         ).join('');
@@ -357,8 +360,135 @@
             loadTab(firstAllowedTab);
         }
         
+        initDraggable(panel);
+        preloadAllTabs();
+        
         log('SYSTEM', 'Interface chargee', 'success');
         log('SYSTEM', `Bienvenue ${getPlayerName()}!`, 'info');
+    }
+
+    function initDraggable(panel) {
+        const header = panel.querySelector('.ultimate-header');
+        let isDragging = false;
+        let startX, startY, startLeft, startTop;
+        let hasMoved = false;
+
+        header.addEventListener('mousedown', function(e) {
+            if (e.target.closest('.ultimate-close')) return;
+            
+            isDragging = true;
+            hasMoved = false;
+            
+            const rect = panel.getBoundingClientRect();
+            startX = e.clientX;
+            startY = e.clientY;
+            startLeft = rect.left;
+            startTop = rect.top;
+            
+            panel.classList.add('dragging');
+            panel.style.transform = 'none';
+            panel.style.left = startLeft + 'px';
+            panel.style.top = startTop + 'px';
+            
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging) return;
+            
+            const deltaX = e.clientX - startX;
+            const deltaY = e.clientY - startY;
+            
+            if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                hasMoved = true;
+            }
+            
+            let newLeft = startLeft + deltaX;
+            let newTop = startTop + deltaY;
+            
+            const maxLeft = window.innerWidth - panel.offsetWidth;
+            const maxTop = window.innerHeight - panel.offsetHeight;
+            
+            newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+            newTop = Math.max(0, Math.min(newTop, maxTop));
+            
+            panel.style.left = newLeft + 'px';
+            panel.style.top = newTop + 'px';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                panel.classList.remove('dragging');
+            }
+        });
+    }
+
+    function preloadAllTabs() {
+        log('SYSTEM', 'Prechargement des modules...', 'info');
+        
+        let loadIndex = 0;
+        const tabsToLoad = TABS_CONFIG.filter(t => !t.disabled && isModuleAllowed(t.id) && t.id !== currentTab);
+        
+        function loadNextTab() {
+            if (loadIndex >= tabsToLoad.length) {
+                log('SYSTEM', 'Tous les modules precharges', 'success');
+                return;
+            }
+            
+            const tab = tabsToLoad[loadIndex];
+            loadIndex++;
+            
+            if (loadedTabs[tab.id]) {
+                loadNextTab();
+                return;
+            }
+            
+            const scriptUrl = `${BASE_URL}/${tab.script}?v=${Date.now()}`;
+            
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: scriptUrl,
+                onload: function(response) {
+                    if (response.status === 200) {
+                        try {
+                            const tabModule = {
+                                uw: uw,
+                                log: log,
+                                getPlayerName: getPlayerName,
+                                getWorldName: getWorldName,
+                                GM_getValue: GM_getValue,
+                                GM_setValue: GM_setValue,
+                                GM_addStyle: GM_addStyle,
+                                GM_xmlhttpRequest: GM_xmlhttpRequest
+                            };
+                            
+                            const executeTab = new Function('module', response.responseText);
+                            executeTab(tabModule);
+                            
+                            loadedTabs[tab.id] = tabModule;
+                            
+                            const content = document.getElementById(`tab-${tab.id}`);
+                            if (content && tabModule.render) {
+                                content.innerHTML = '';
+                                tabModule.render(content);
+                                if (tabModule.init) {
+                                    tabModule.init();
+                                }
+                            }
+                        } catch (e) {
+                            console.error(`[GU] Erreur preload "${tab.name}":`, e);
+                        }
+                    }
+                    setTimeout(loadNextTab, 100);
+                },
+                onerror: function() {
+                    setTimeout(loadNextTab, 100);
+                }
+            });
+        }
+        
+        setTimeout(loadNextTab, 500);
     }
 
     function togglePanel() {
