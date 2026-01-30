@@ -218,289 +218,391 @@ function getTimeInMs(timeStr) {
 
 module.render = function(container) {
     container.innerHTML = `
-        <div class="main-control inactive" id="calage-control">
-            <div class="control-info">
-                <div class="control-label">Calage Attaque</div>
-                <div class="control-status" id="calage-status">En attente</div>
-            </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="toggle-calage">
-                <span class="toggle-slider"></span>
-            </label>
+        <div class="calage-tabs">
+            <button class="calage-tab active" data-view="plans">📋 Mes Plans</button>
+            <button class="calage-tab" data-view="nouveau">+ Nouveau Plan</button>
+            <button class="calage-tab" data-view="edition" id="calage-tab-edition" style="display:none;">✏️ Edition</button>
         </div>
-
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>📝</span> Nouvelle Attaque</div>
-                <span class="section-toggle">▼</span>
+        
+        <div class="calage-content">
+            <!-- Vue Mes Plans -->
+            <div class="calage-view active" id="calage-view-plans">
+                <div id="calage-plans-liste"></div>
             </div>
-            <div class="section-content">
-                <div class="options-grid">
-                    <div class="option-group">
-                        <span class="option-label">Ville source</span>
-                        <select class="option-select" id="calage-ville-source"></select>
+            
+            <!-- Vue Nouveau Plan -->
+            <div class="calage-view" id="calage-view-nouveau">
+                <div class="calage-section">
+                    <h3>📝 Creer un nouveau plan</h3>
+                    <div class="calage-row">
+                        <label>Nom du plan:</label>
+                        <input type="text" id="calage-new-nom" class="calage-input" placeholder="Ex: Colo joueur X">
                     </div>
-                    <div class="option-group">
-                        <span class="option-label">ID Cible</span>
-                        <input type="number" class="option-input" id="calage-ville-cible" placeholder="Ex: 6149">
-                    </div>
-                    <div class="option-group">
-                        <span class="option-label">Heure d'arrivee</span>
-                        <input type="time" class="option-input" id="calage-heure-arrivee" step="1">
-                    </div>
-                    <div class="option-group">
-                        <span class="option-label">Type</span>
-                        <select class="option-select" id="calage-type-attaque">
-                            <option value="attack">Attaque</option>
-                            <option value="support">Soutien</option>
+                    <div class="calage-row">
+                        <label>Type:</label>
+                        <select id="calage-new-type" class="calage-select">
+                            <option value="attack">⚔️ Attaque</option>
+                            <option value="support">🛡️ Soutien</option>
                         </select>
                     </div>
-                </div>
-                
-                <div id="calage-travel-info" style="margin-top: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; display: none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 11px; color: #BDB76B;">Temps de trajet (estime)</span>
-                        <span id="calage-travel-time" style="font-size: 13px; color: #FFD700; font-weight: bold;">--:--</span>
+                    <div class="calage-row">
+                        <label>Ville cible (ID):</label>
+                        <input type="number" id="calage-new-cible" class="calage-input" placeholder="ID de la ville cible">
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-                        <span style="font-size: 11px; color: #BDB76B;">Heure d'envoi</span>
-                        <span id="calage-send-time" style="font-size: 13px; color: #4CAF50; font-weight: bold;">--:--:--</span>
-                    </div>
-                    <div id="calage-travel-status" style="margin-top: 6px; font-size: 10px; color: #8B8B83;"></div>
-                </div>
-
-                <div style="margin-top: 12px;">
-                    <span class="option-label">Tolerance</span>
-                    <div style="display: flex; gap: 15px; margin-top: 6px;">
-                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; color: #BDB76B; font-size: 12px;">
-                            <input type="checkbox" id="calage-tolerance-moins"> -1s
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; color: #BDB76B; font-size: 12px;">
-                            <input type="checkbox" id="calage-tolerance-plus"> +1s
-                        </label>
-                    </div>
-                </div>
-                
-                <div id="calage-boat-indicator" style="margin-top: 15px; display: none;">
-                    <span class="option-label">Transport des troupes</span>
-                    <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px; margin-top: 6px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <span style="font-size: 11px; color: #BDB76B;">Capacite bateaux</span>
-                            <span id="calage-boat-text" style="font-size: 11px; color: #F5DEB3;">0 / 0 pop</span>
+                    <div class="calage-row">
+                        <label>Tolerance:</label>
+                        <div class="calage-tolerance">
+                            <select id="calage-new-tol-moins" class="calage-select calage-select-small">
+                                <option value="0">0s</option>
+                                <option value="-1">-1s</option>
+                                <option value="-2">-2s</option>
+                                <option value="-3">-3s</option>
+                            </select>
+                            <span>a</span>
+                            <select id="calage-new-tol-plus" class="calage-select calage-select-small">
+                                <option value="0">0s</option>
+                                <option value="1">+1s</option>
+                                <option value="2">+2s</option>
+                                <option value="3">+3s</option>
+                            </select>
                         </div>
-                        <div style="background: rgba(0,0,0,0.4); border-radius: 4px; height: 12px; overflow: hidden;">
-                            <div id="calage-boat-bar" style="height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A); width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <div class="calage-row calage-row-right">
+                        <button class="calage-btn calage-btn-primary" id="calage-btn-creer-plan">Creer le plan</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Vue Edition Plan -->
+            <div class="calage-view" id="calage-view-edition">
+                <div class="calage-section">
+                    <h3>✏️ Editer le plan: <span id="calage-edit-plan-nom"></span></h3>
+                    <input type="hidden" id="calage-edit-plan-id">
+                    <div class="calage-row">
+                        <label>Nom:</label>
+                        <input type="text" id="calage-edit-nom" class="calage-input">
+                    </div>
+                    <div class="calage-row">
+                        <label>Ville cible (ID):</label>
+                        <input type="number" id="calage-edit-cible" class="calage-input">
+                    </div>
+                    <div class="calage-row">
+                        <label>Tolerance:</label>
+                        <div class="calage-tolerance">
+                            <select id="calage-edit-tol-moins" class="calage-select calage-select-small">
+                                <option value="0">0s</option>
+                                <option value="-1">-1s</option>
+                                <option value="-2">-2s</option>
+                                <option value="-3">-3s</option>
+                            </select>
+                            <span>a</span>
+                            <select id="calage-edit-tol-plus" class="calage-select calage-select-small">
+                                <option value="0">0s</option>
+                                <option value="1">+1s</option>
+                                <option value="2">+2s</option>
+                                <option value="3">+3s</option>
+                            </select>
                         </div>
-                        <div id="calage-boat-warning" style="margin-top: 6px; font-size: 10px; color: #FF9800; display: none;">
-                            Ajoutez des bateaux de transport!
-                        </div>
-                        <div id="calage-research-info" style="margin-top: 4px; font-size: 9px; color: #8B8B83;"></div>
                     </div>
                 </div>
                 
-                <div style="margin-top: 15px;">
-                    <span class="option-label">Troupes terrestres</span>
-                    <div class="calage-units-grid" id="calage-ground-units"></div>
+                <div class="calage-section">
+                    <h3>🏰 Ajouter une attaque</h3>
+                    <div class="calage-row">
+                        <label>Ville source:</label>
+                        <select id="calage-edit-source" class="calage-select"></select>
+                    </div>
+                    <div class="calage-row">
+                        <label>Heure d'arrivee:</label>
+                        <input type="time" id="calage-edit-heure" class="calage-input" step="1">
+                    </div>
+                    
+                    <div class="calage-units-title">🗡️ Unites terrestres</div>
+                    <div class="calage-units-grid" id="calage-edit-units-terre"></div>
+                    
+                    <div class="calage-units-title">⚓ Unites navales</div>
+                    <div class="calage-units-grid" id="calage-edit-units-naval"></div>
+                    
+                    <div id="calage-capacity-container" class="calage-capacity" style="display:none;">
+                        <div class="calage-capacity-label">
+                            <span>Capacite de transport</span>
+                            <span id="calage-capacity-text">0 / 0</span>
+                        </div>
+                        <div class="calage-capacity-bar">
+                            <div class="calage-capacity-fill" id="calage-capacity-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="calage-row calage-row-right">
+                        <button class="calage-btn calage-btn-success" id="calage-btn-ajouter-attaque">+ Ajouter cette attaque</button>
+                    </div>
                 </div>
                 
-                <div style="margin-top: 15px;">
-                    <span class="option-label">Flotte</span>
-                    <div class="calage-units-grid" id="calage-naval-units"></div>
+                <div class="calage-section">
+                    <h3>📋 Attaques du plan (<span id="calage-edit-attaques-count">0</span>)</h3>
+                    <div id="calage-edit-attaques-liste"></div>
                 </div>
                 
-                <button class="btn btn-full btn-success" id="calage-btn-ajouter" style="margin-top: 15px;">+ Ajouter Attaque</button>
+                <div class="calage-row calage-row-between">
+                    <button class="calage-btn calage-btn-secondary" id="calage-btn-retour">← Retour</button>
+                    <button class="calage-btn calage-btn-primary" id="calage-btn-sauver-plan">💾 Sauvegarder</button>
+                </div>
             </div>
         </div>
-
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>📅</span> Planificateur</div>
-                <span class="section-toggle">▼</span>
-            </div>
-            <div class="section-content">
-                <p style="font-size: 11px; color: #BDB76B; margin-bottom: 12px;">Generer plusieurs attaques espacees a partir de l'heure d'arrivee.</p>
-                <div class="options-grid" style="margin-bottom: 12px;">
-                    <div class="option-group">
-                        <span class="option-label">Nombre d'attaques</span>
-                        <input type="number" class="option-input" id="calage-plan-count" value="1" min="1" max="50">
-                    </div>
-                    <div class="option-group">
-                        <span class="option-label">Intervalle (sec)</span>
-                        <input type="number" class="option-input" id="calage-plan-interval" value="1" min="1" max="60">
-                    </div>
-                </div>
-                <button class="btn btn-full" id="calage-btn-planifier">Generer les attaques</button>
-            </div>
-        </div>
-
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>📋</span> Attaques en cours (<span id="calage-count">0</span>)</div>
-                <span class="section-toggle">▼</span>
-            </div>
-            <div class="section-content">
-                <div id="calage-liste-attaques"></div>
-                <div style="display: flex; gap: 8px; margin-top: 12px;">
-                    <button class="btn btn-danger" id="calage-btn-clear" style="font-size: 11px; padding: 8px 12px;">Tout supprimer</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>💾</span> Plans sauvegardes</div>
-                <span class="section-toggle">▼</span>
-            </div>
-            <div class="section-content">
-                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="text" class="option-input" id="calage-plan-name" placeholder="Nom du plan" style="flex: 1;">
-                    <button class="btn" id="calage-save-plan">Sauver</button>
-                </div>
-                <div id="calage-plans-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px;"></div>
-                <div style="display: flex; gap: 8px;">
-                    <button class="btn" style="flex: 1;" id="calage-export-plans">Exporter</button>
-                    <button class="btn" style="flex: 1;" id="calage-import-plans">Importer</button>
-                </div>
-                <input type="file" id="calage-import-file" style="display: none;" accept=".json">
-            </div>
+        
+        <div class="calage-status-bar">
+            <span id="calage-status">Status: En attente</span>
+            <button class="calage-btn calage-btn-success calage-btn-sm" id="calage-btn-toggle-bot">▶️ Demarrer</button>
         </div>
 
         <style>
-            .calage-units-grid {
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 6px;
-                margin-top: 8px;
-            }
-            .calage-unit-input {
+            .calage-tabs {
                 display: flex;
-                flex-direction: column;
-                align-items: center;
-                background: rgba(0,0,0,0.2);
-                border: 1px solid rgba(212,175,55,0.2);
-                border-radius: 4px;
-                padding: 6px;
+                gap: 5px;
+                padding: 10px 0;
+                margin-bottom: 15px;
+                border-bottom: 1px solid rgba(212,175,55,0.3);
             }
-            .calage-unit-input .unit-icon {
-                width: 40px;
-                height: 40px;
-                margin-bottom: 2px;
-            }
-            .calage-unit-input label {
-                font-size: 8px;
-                color: #BDB76B;
-                margin-bottom: 2px;
-                text-align: center;
-            }
-            .calage-unit-input .unit-count {
-                font-size: 9px;
-                color: #8BC34A;
-                margin-bottom: 3px;
-            }
-            .calage-unit-input input {
-                width: 45px;
-                padding: 3px;
-                text-align: center;
-                border: 1px solid #8B6914;
-                border-radius: 3px;
-                background: #2D2419;
-                color: #F5DEB3;
-                font-size: 10px;
-            }
-            .attaque-item {
-                background: rgba(0,0,0,0.3);
-                border: 1px solid rgba(212,175,55,0.3);
+            .calage-tab {
+                padding: 8px 16px;
+                background: rgba(255,255,255,0.1);
+                border: none;
                 border-radius: 6px;
-                padding: 10px;
-                margin-bottom: 8px;
+                color: #8B8B83;
+                cursor: pointer;
+                font-size: 12px;
+                font-family: 'Cinzel', serif;
+                transition: all 0.2s;
             }
-            .attaque-item.en-cours {
-                border-color: #ffc107;
-                background: rgba(255, 193, 7, 0.1);
+            .calage-tab:hover { background: rgba(212,175,55,0.2); color: #F5DEB3; }
+            .calage-tab.active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+            
+            .calage-content { min-height: 300px; }
+            .calage-view { display: none; }
+            .calage-view.active { display: block; }
+            
+            .calage-section {
+                background: rgba(0,0,0,0.25);
+                border: 1px solid rgba(212,175,55,0.3);
+                border-radius: 10px;
+                padding: 15px;
+                margin-bottom: 15px;
             }
-            .attaque-item.terminee {
-                border-color: #4CAF50;
-                background: rgba(76, 175, 80, 0.1);
+            .calage-section h3 {
+                margin: 0 0 15px 0;
+                font-size: 14px;
+                color: #D4AF37;
+                font-family: 'Cinzel', serif;
+                border-bottom: 1px solid rgba(212,175,55,0.2);
+                padding-bottom: 10px;
             }
-            .attaque-header {
+            
+            .calage-row {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 12px;
+                align-items: center;
+            }
+            .calage-row label {
+                width: 140px;
+                font-size: 12px;
+                color: #BDB76B;
+                flex-shrink: 0;
+            }
+            .calage-row-right { justify-content: flex-end; margin-top: 15px; }
+            .calage-row-between { justify-content: space-between; margin-top: 15px; }
+            
+            .calage-input, .calage-select {
+                flex: 1;
+                padding: 10px 12px;
+                border: 1px solid #8B6914;
+                border-radius: 6px;
+                background: linear-gradient(180deg, #3D3225 0%, #2D2419 100%);
+                color: #F5DEB3;
+                font-size: 13px;
+                font-family: 'Philosopher', serif;
+            }
+            .calage-input:focus, .calage-select:focus {
+                outline: none;
+                border-color: #D4AF37;
+                box-shadow: 0 0 10px rgba(212,175,55,0.3);
+            }
+            .calage-select-small { width: 80px; flex: none; }
+            
+            .calage-tolerance {
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                flex: 1;
+            }
+            .calage-tolerance span { color: #BDB76B; }
+            
+            .calage-btn {
+                padding: 10px 20px;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: bold;
+                font-family: 'Cinzel', serif;
+                transition: all 0.2s;
+            }
+            .calage-btn:hover { transform: translateY(-2px); }
+            .calage-btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+            .calage-btn-success { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; }
+            .calage-btn-danger { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); color: white; }
+            .calage-btn-secondary { background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%); color: white; }
+            .calage-btn-warning { background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%); color: black; }
+            .calage-btn-sm { padding: 6px 12px; font-size: 11px; }
+            
+            .calage-status-bar {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 6px;
+                padding: 12px 15px;
+                background: rgba(0,0,0,0.4);
+                border-radius: 8px;
+                margin-top: 15px;
             }
-            .attaque-info .nom {
-                font-weight: bold;
-                color: #F5DEB3;
-                font-size: 12px;
+            #calage-status { font-size: 12px; color: #BDB76B; }
+            
+            /* Plans list */
+            .calage-plan-item {
+                background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(212,175,55,0.3);
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 10px;
             }
-            .attaque-info .details {
-                font-size: 10px;
-                color: #BDB76B;
-                margin-top: 3px;
-            }
-            .attaque-times {
+            .calage-plan-item:hover { border-color: rgba(212,175,55,0.5); }
+            .calage-plan-header {
                 display: flex;
-                gap: 15px;
-                font-size: 10px;
-                color: #8B8B83;
-                margin-top: 4px;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 10px;
             }
-            .attaque-times .arrival { color: #FF9800; }
-            .attaque-times .send { color: #4CAF50; }
-            .attaque-status {
+            .calage-plan-name { font-size: 15px; font-weight: bold; color: #F5DEB3; font-family: 'Cinzel', serif; }
+            .calage-plan-target { font-size: 11px; color: #8B8B83; margin-top: 3px; }
+            .calage-plan-stats { display: flex; gap: 15px; font-size: 11px; color: #BDB76B; }
+            .calage-plan-actions { display: flex; gap: 5px; }
+            
+            /* Units grid */
+            .calage-units-title {
+                font-size: 12px;
+                color: #D4AF37;
+                margin: 15px 0 10px 0;
+                padding-bottom: 5px;
+                border-bottom: 1px solid rgba(212,175,55,0.2);
+            }
+            .calage-units-grid {
+                display: grid;
+                grid-template-columns: repeat(5, 1fr);
+                gap: 8px;
+            }
+            .calage-unit-card {
+                background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(212,175,55,0.2);
+                border-radius: 6px;
+                padding: 8px;
+                text-align: center;
+                transition: all 0.2s;
+            }
+            .calage-unit-card:hover { border-color: #D4AF37; }
+            .calage-unit-card.has-units { border-color: #4CAF50; background: rgba(76,175,80,0.1); }
+            .calage-unit-card .unit-icon {
+                width: 36px;
+                height: 36px;
+                margin: 0 auto 4px;
+            }
+            .calage-unit-card .unit-name {
+                font-size: 9px;
+                color: #BDB76B;
+                margin-bottom: 2px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .calage-unit-card .unit-dispo {
+                font-size: 9px;
+                color: #8B8B83;
+                margin-bottom: 4px;
+            }
+            .calage-unit-card input {
+                width: 100%;
+                padding: 4px;
+                text-align: center;
+                border: 1px solid #8B6914;
+                border-radius: 4px;
+                background: #2D2419;
+                color: #F5DEB3;
+                font-size: 11px;
+            }
+            
+            /* Capacity bar */
+            .calage-capacity {
+                margin: 15px 0;
+                padding: 10px;
+                background: rgba(0,0,0,0.3);
+                border-radius: 8px;
+            }
+            .calage-capacity-label {
+                display: flex;
+                justify-content: space-between;
+                font-size: 11px;
+                color: #BDB76B;
+                margin-bottom: 5px;
+            }
+            .calage-capacity-bar {
+                height: 16px;
+                background: rgba(0,0,0,0.4);
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            .calage-capacity-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #4CAF50, #8BC34A);
+                transition: width 0.3s;
+                border-radius: 8px;
+            }
+            .calage-capacity-fill.warning { background: linear-gradient(90deg, #ffc107, #ffdb4d); }
+            .calage-capacity-fill.error { background: linear-gradient(90deg, #dc3545, #ff6b6b); }
+            
+            /* Attaques list */
+            .calage-attaque-item {
+                background: rgba(0,0,0,0.2);
+                border: 1px solid rgba(212,175,55,0.2);
+                border-radius: 6px;
+                padding: 10px;
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .calage-attaque-item.encours { border-color: #ffc107; background: rgba(255,193,7,0.1); }
+            .calage-attaque-item.succes { border-color: #4CAF50; background: rgba(76,175,80,0.1); }
+            .calage-attaque-ville { flex: 1; }
+            .calage-attaque-ville-name { font-weight: bold; font-size: 12px; color: #F5DEB3; }
+            .calage-attaque-ville-units { font-size: 10px; color: #8B8B83; margin-top: 2px; }
+            .calage-attaque-heure { font-size: 14px; font-weight: bold; color: #D4AF37; text-align: center; }
+            .calage-attaque-heure small { display: block; font-size: 9px; color: #8B8B83; font-weight: normal; }
+            .calage-attaque-status {
                 padding: 3px 8px;
                 border-radius: 10px;
                 font-size: 10px;
                 font-weight: bold;
             }
-            .status-attente { background: #6c757d; color: white; }
-            .status-encours { background: #ffc107; color: black; }
-            .status-succes { background: #4CAF50; color: white; }
-            .calage-actions { display: flex; gap: 4px; margin-top: 8px; }
-            .calage-actions button {
-                padding: 4px 8px;
-                font-size: 10px;
-                border-radius: 4px;
-                cursor: pointer;
-                border: none;
-                flex: 1;
-            }
-            .btn-lancer { background: #ffc107; color: black; }
-            .btn-suppr { background: #dc3545; color: white; }
-            #calage-liste-attaques {
-                max-height: 250px;
-                overflow-y: auto;
-            }
-            .plan-item {
-                background: rgba(0,0,0,0.3);
-                border: 1px solid rgba(212,175,55,0.3);
-                border-radius: 6px;
-                padding: 10px;
-                margin-bottom: 8px;
-            }
-            .plan-item .plan-name {
-                font-weight: bold;
-                color: #F5DEB3;
-                font-size: 13px;
-            }
-            .plan-item .plan-meta {
-                font-size: 10px;
+            .calage-status-attente { background: #6c757d; color: white; }
+            .calage-status-encours { background: #ffc107; color: black; }
+            .calage-status-succes { background: #4CAF50; color: white; }
+            
+            .calage-empty {
+                text-align: center;
+                padding: 40px 20px;
                 color: #8B8B83;
-                margin-top: 4px;
             }
-            .plan-item .plan-actions {
-                display: flex;
-                gap: 4px;
-                margin-top: 8px;
-            }
-            .plan-item .plan-actions button {
-                flex: 1;
-                padding: 5px 8px;
-                font-size: 10px;
-                border-radius: 4px;
-                cursor: pointer;
-                border: none;
-            }
+            .calage-empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.5; }
+            .calage-empty-text { font-size: 13px; }
+            .calage-empty-hint { font-size: 11px; margin-top: 8px; color: #666; }
             
             #calage-notifs {
                 position: fixed;
