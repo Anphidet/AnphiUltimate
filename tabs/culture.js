@@ -103,44 +103,70 @@ function getResourcesForTown(townId) {
 
 function getGoldForPlayer() {
     try {
-        const models = uw.MM.getModels();
-        
-        if (models.PlayerSettings) {
-            for (let id in models.PlayerSettings) {
-                const ps = models.PlayerSettings[id];
-                const attrs = ps?.attributes || ps;
-                if (attrs?.gold !== undefined) {
-                    console.log('[CULTURE] Gold trouve dans PlayerSettings:', attrs.gold);
-                    return attrs.gold;
+        if (uw.MM && uw.MM.getOnlyCollectionByName) {
+            const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
+            if (playerGold && playerGold.models && playerGold.models.length > 0) {
+                const gold = playerGold.models[0].get('gold');
+                if (gold !== undefined) {
+                    console.log('[CULTURE] Gold via PlayerGold collection:', gold);
+                    return gold;
                 }
             }
         }
         
-        if (models.PremiumFeatures) {
-            for (let id in models.PremiumFeatures) {
-                const pf = models.PremiumFeatures[id];
-                const attrs = pf?.attributes || pf;
-                if (attrs?.gold !== undefined) {
-                    console.log('[CULTURE] Gold trouve dans PremiumFeatures:', attrs.gold);
-                    return attrs.gold;
-                }
-            }
-        }
-        
-        if (models.PlayerGold) {
-            for (let id in models.PlayerGold) {
-                const pg = models.PlayerGold[id];
-                const attrs = pg?.attributes || pg;
-                if (attrs?.gold !== undefined) {
-                    console.log('[CULTURE] Gold trouve dans PlayerGold:', attrs.gold);
-                    return attrs.gold;
-                }
+        if (uw.GameData && uw.GameData.Premium) {
+            const gold = uw.GameData.Premium.gold;
+            if (gold !== undefined) {
+                console.log('[CULTURE] Gold via GameData.Premium:', gold);
+                return gold;
             }
         }
         
         if (uw.Game && uw.Game.premium_features) {
-            console.log('[CULTURE] Gold trouve dans Game.premium_features:', uw.Game.premium_features.gold);
-            return uw.Game.premium_features.gold || 0;
+            const pf = uw.Game.premium_features;
+            if (pf.gold !== undefined) {
+                console.log('[CULTURE] Gold via Game.premium_features:', pf.gold);
+                return pf.gold;
+            }
+        }
+        
+        const models = uw.MM.getModels();
+        
+        const goldModels = ['PlayerGold', 'PlayerLedger', 'PremiumFeatures', 'PlayerSettings', 'Player'];
+        for (let modelName of goldModels) {
+            if (models[modelName]) {
+                for (let id in models[modelName]) {
+                    const obj = models[modelName][id];
+                    
+                    if (obj && typeof obj.get === 'function') {
+                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
+                            const val = obj.get(attr);
+                            if (val !== undefined && val !== null && typeof val === 'number') {
+                                console.log(`[CULTURE] Gold via ${modelName}.get('${attr}'):`, val);
+                                return val;
+                            }
+                        }
+                    }
+                    
+                    if (obj && obj.attributes) {
+                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
+                            if (obj.attributes[attr] !== undefined) {
+                                console.log(`[CULTURE] Gold via ${modelName}.attributes.${attr}:`, obj.attributes[attr]);
+                                return obj.attributes[attr];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        const domGold = document.querySelector('#trainer_trainer_hint_gold .trainer_icon_gold + span, .gold_amount, .ui_gold_amount');
+        if (domGold) {
+            const goldText = domGold.textContent.replace(/[^0-9]/g, '');
+            if (goldText) {
+                console.log('[CULTURE] Gold via DOM:', parseInt(goldText));
+                return parseInt(goldText);
+            }
         }
         
         console.log('[CULTURE] Gold non trouve');
@@ -152,86 +178,73 @@ function getGoldForPlayer() {
 
 function getBattlePointsForPlayer() {
     try {
+        if (uw.MM && uw.MM.getOnlyCollectionByName) {
+            const playerLedger = uw.MM.getOnlyCollectionByName('PlayerLedger');
+            if (playerLedger && playerLedger.models && playerLedger.models.length > 0) {
+                const model = playerLedger.models[0];
+                for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
+                    const bp = model.get(attr);
+                    if (bp !== undefined && bp !== null && typeof bp === 'number') {
+                        console.log(`[CULTURE] BP via PlayerLedger.get('${attr}'):`, bp);
+                        return bp;
+                    }
+                }
+                if (model.attributes) {
+                    for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
+                        if (model.attributes[attr] !== undefined) {
+                            console.log(`[CULTURE] BP via PlayerLedger.attributes.${attr}:`, model.attributes[attr]);
+                            return model.attributes[attr];
+                        }
+                    }
+                }
+            }
+        }
+        
         const models = uw.MM.getModels();
         
-        if (models.PlayerLedger) {
-            for (let id in models.PlayerLedger) {
-                const ledger = models.PlayerLedger[id];
-                console.log('[CULTURE] PlayerLedger entry:', id, ledger);
-                
-                if (ledger && typeof ledger.get === 'function') {
-                    const bp = ledger.get('battle_points');
-                    if (bp !== undefined) {
-                        console.log('[CULTURE] BP via get():', bp);
-                        return bp;
+        const bpModels = ['PlayerLedger', 'PlayerKillpoints', 'Player', 'Killpoints'];
+        for (let modelName of bpModels) {
+            if (models[modelName]) {
+                for (let id in models[modelName]) {
+                    const obj = models[modelName][id];
+                    
+                    if (obj && typeof obj.get === 'function') {
+                        for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def']) {
+                            const val = obj.get(attr);
+                            if (val !== undefined && val !== null && typeof val === 'number') {
+                                console.log(`[CULTURE] BP via ${modelName}.get('${attr}'):`, val);
+                                return val;
+                            }
+                        }
+                    }
+                    
+                    if (obj && obj.attributes) {
+                        for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def']) {
+                            if (obj.attributes[attr] !== undefined && typeof obj.attributes[attr] === 'number') {
+                                console.log(`[CULTURE] BP via ${modelName}.attributes.${attr}:`, obj.attributes[attr]);
+                                return obj.attributes[attr];
+                            }
+                        }
                     }
                 }
-                
-                if (ledger?.attributes?.battle_points !== undefined) {
-                    console.log('[CULTURE] BP dans attributes:', ledger.attributes.battle_points);
-                    return ledger.attributes.battle_points;
-                }
-                
-                if (ledger?.battle_points !== undefined) {
-                    console.log('[CULTURE] BP direct:', ledger.battle_points);
-                    return ledger.battle_points;
-                }
             }
         }
         
-        if (models.Player) {
-            for (let id in models.Player) {
-                const p = models.Player[id];
-                
-                if (p && typeof p.get === 'function') {
-                    const bp = p.get('battle_points');
-                    if (bp !== undefined) {
-                        console.log('[CULTURE] BP Player via get():', bp);
-                        return bp;
-                    }
-                }
-                
-                const attrs = p?.attributes || p;
-                if (attrs?.battle_points !== undefined) {
-                    console.log('[CULTURE] BP trouve dans Player:', attrs.battle_points);
-                    return attrs.battle_points;
-                }
+        if (uw.Game && uw.Game.player_killpoints !== undefined) {
+            console.log('[CULTURE] BP via Game.player_killpoints:', uw.Game.player_killpoints);
+            return uw.Game.player_killpoints;
+        }
+        
+        const domBp = document.querySelector('.battle_points_amount, .killpoints_amount, #battle_points_count');
+        if (domBp) {
+            const bpText = domBp.textContent.replace(/[^0-9]/g, '');
+            if (bpText) {
+                console.log('[CULTURE] BP via DOM:', parseInt(bpText));
+                return parseInt(bpText);
             }
         }
         
-        if (models.PlayerKillpoints) {
-            for (let id in models.PlayerKillpoints) {
-                const kp = models.PlayerKillpoints[id];
-                
-                if (kp && typeof kp.get === 'function') {
-                    const bp = kp.get('battle_points');
-                    if (bp !== undefined) {
-                        console.log('[CULTURE] BP PlayerKillpoints via get():', bp);
-                        return bp;
-                    }
-                }
-                
-                const attrs = kp?.attributes || kp;
-                if (attrs?.battle_points !== undefined) {
-                    console.log('[CULTURE] BP trouve dans PlayerKillpoints:', attrs.battle_points);
-                    return attrs.battle_points;
-                }
-            }
-        }
-        
-        if (uw.Game) {
-            if (uw.Game.battle_points !== undefined) {
-                console.log('[CULTURE] BP trouve dans Game:', uw.Game.battle_points);
-                return uw.Game.battle_points;
-            }
-            if (uw.Game.player_battle_points !== undefined) {
-                console.log('[CULTURE] BP trouve dans Game.player_battle_points:', uw.Game.player_battle_points);
-                return uw.Game.player_battle_points;
-            }
-        }
-        
-        console.log('[CULTURE] BP non trouve dans aucun modele');
-        
+        console.log('[CULTURE] BP non trouve');
     } catch(e) {
         console.log('[CULTURE] Erreur getBattlePoints:', e);
     }
@@ -240,37 +253,139 @@ function getBattlePointsForPlayer() {
 
 function debugModels() {
     try {
-        const models = uw.MM.getModels();
-        console.log('[CULTURE DEBUG] === TOUS LES MODELES ===');
-        for (let key in models) {
-            const model = models[key];
-            if (model && typeof model === 'object') {
-                const firstKey = Object.keys(model)[0];
-                if (firstKey) {
-                    const first = model[firstKey];
-                    const attrs = first?.attributes || first;
-                    console.log(`[CULTURE DEBUG] ${key}:`, attrs ? Object.keys(attrs).slice(0, 10) : 'vide');
+        console.log('[CULTURE DEBUG] ======================================');
+        console.log('[CULTURE DEBUG] === EXPLORATION COMPLETE DES MODELES ===');
+        console.log('[CULTURE DEBUG] ======================================');
+        
+        console.log('[CULTURE DEBUG] === MM.getOnlyCollectionByName ===');
+        if (uw.MM && uw.MM.getOnlyCollectionByName) {
+            const collections = ['PlayerLedger', 'PlayerGold', 'Player', 'Killpoints', 'PremiumFeatures'];
+            for (let collName of collections) {
+                try {
+                    const coll = uw.MM.getOnlyCollectionByName(collName);
+                    if (coll) {
+                        console.log(`[CULTURE DEBUG] Collection ${collName}:`, coll);
+                        if (coll.models && coll.models.length > 0) {
+                            const model = coll.models[0];
+                            console.log(`[CULTURE DEBUG] ${collName}.models[0]:`, model);
+                            if (model && model.attributes) {
+                                console.log(`[CULTURE DEBUG] ${collName}.models[0].attributes:`, JSON.stringify(model.attributes));
+                            }
+                        }
+                    } else {
+                        console.log(`[CULTURE DEBUG] Collection ${collName}: null`);
+                    }
+                } catch(e) {
+                    console.log(`[CULTURE DEBUG] Collection ${collName}: erreur`, e.message);
                 }
+            }
+        } else {
+            console.log('[CULTURE DEBUG] MM.getOnlyCollectionByName non disponible');
+        }
+        
+        console.log('[CULTURE DEBUG] === MM.getModels() ===');
+        const models = uw.MM.getModels();
+        console.log('[CULTURE DEBUG] Tous les modeles disponibles:', Object.keys(models));
+        
+        const importantModels = ['PlayerLedger', 'PlayerSettings', 'PremiumFeatures', 'Player', 'PlayerGold', 'PlayerKillpoints', 'Killpoints'];
+        
+        for (let modelName of importantModels) {
+            if (models[modelName]) {
+                console.log(`[CULTURE DEBUG] --- ${modelName} ---`);
+                for (let id in models[modelName]) {
+                    const obj = models[modelName][id];
+                    console.log(`[CULTURE DEBUG] ${modelName}[${id}] type:`, typeof obj);
+                    
+                    if (obj && typeof obj.get === 'function') {
+                        const testAttrs = ['gold', 'battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def', 'premium_gold'];
+                        for (let attr of testAttrs) {
+                            const val = obj.get(attr);
+                            if (val !== undefined) {
+                                console.log(`[CULTURE DEBUG] ${modelName}.get('${attr}'):`, val);
+                            }
+                        }
+                    }
+                    
+                    if (obj && obj.attributes) {
+                        console.log(`[CULTURE DEBUG] ${modelName}.attributes:`, JSON.stringify(obj.attributes));
+                    }
+                    
+                    if (obj && !obj.attributes && typeof obj !== 'function') {
+                        console.log(`[CULTURE DEBUG] ${modelName} raw keys:`, Object.keys(obj));
+                    }
+                    break;
+                }
+            } else {
+                console.log(`[CULTURE DEBUG] ${modelName}: NON PRESENT`);
             }
         }
         
-        console.log('[CULTURE DEBUG] === GAME ===');
+        console.log('[CULTURE DEBUG] === uw.Game ===');
         if (uw.Game) {
+            console.log('[CULTURE DEBUG] Game.battle_points:', uw.Game.battle_points);
+            console.log('[CULTURE DEBUG] Game.player_killpoints:', uw.Game.player_killpoints);
+            console.log('[CULTURE DEBUG] Game.premium_features:', uw.Game.premium_features);
             const gameKeys = Object.keys(uw.Game).filter(k => 
+                k.toLowerCase().includes('gold') || 
                 k.toLowerCase().includes('battle') || 
-                k.toLowerCase().includes('point') ||
-                k.toLowerCase().includes('bp')
+                k.toLowerCase().includes('kill') ||
+                k.toLowerCase().includes('point')
             );
-            console.log('[CULTURE DEBUG] Game keys (battle/point/bp):', gameKeys);
-            gameKeys.forEach(k => console.log(`  Game.${k}:`, uw.Game[k]));
+            console.log('[CULTURE DEBUG] Game keys (gold/battle/kill/point):', gameKeys);
+            for (let k of gameKeys) {
+                console.log(`[CULTURE DEBUG] Game.${k}:`, uw.Game[k]);
+            }
         }
         
-        console.log('[CULTURE DEBUG] === GameData ===');
+        console.log('[CULTURE DEBUG] === uw.GameData ===');
         if (uw.GameData) {
-            console.log('[CULTURE DEBUG] GameData.player:', uw.GameData.player);
+            console.log('[CULTURE DEBUG] GameData.Premium:', uw.GameData.Premium);
+            const gdKeys = Object.keys(uw.GameData).filter(k => 
+                k.toLowerCase().includes('gold') || 
+                k.toLowerCase().includes('battle') || 
+                k.toLowerCase().includes('premium')
+            );
+            console.log('[CULTURE DEBUG] GameData keys (gold/battle/premium):', gdKeys);
         }
+        
+        console.log('[CULTURE DEBUG] === DOM Elements ===');
+        const goldSelectors = [
+            '#trainer_trainer_hint_gold',
+            '.gold_amount',
+            '.ui_gold_amount',
+            '[data-gold]',
+            '.premium_gold'
+        ];
+        for (let sel of goldSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                console.log(`[CULTURE DEBUG] DOM ${sel}:`, el.textContent || el.getAttribute('data-gold'));
+            }
+        }
+        
+        const bpSelectors = [
+            '.battle_points_amount',
+            '.killpoints_amount',
+            '#battle_points_count',
+            '[data-battle-points]',
+            '.points_indicator'
+        ];
+        for (let sel of bpSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                console.log(`[CULTURE DEBUG] DOM ${sel}:`, el.textContent || el.getAttribute('data-battle-points'));
+            }
+        }
+        
+        console.log('[CULTURE DEBUG] === TEST FINAL ===');
+        const bp = getBattlePointsForPlayer();
+        const gold = getGoldForPlayer();
+        console.log('[CULTURE DEBUG] Resultat final BP:', bp);
+        console.log('[CULTURE DEBUG] Resultat final Gold:', gold);
+        console.log('[CULTURE DEBUG] ======================================');
+        
     } catch(e) {
-        console.log('[CULTURE DEBUG] Erreur:', e);
+        console.log('[CULTURE DEBUG] Erreur globale:', e);
     }
 }
 
