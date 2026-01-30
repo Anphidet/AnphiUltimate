@@ -1042,14 +1042,6 @@ function ajouterAttaqueAuPlan() {
         return;
     }
 
-    if (hasGroundUnits(units)) {
-        const boatInfo = calculateRequiredBoats(units, sourceId);
-        if (!boatInfo.hasEnoughBoats) {
-            afficherNotification('Erreur', 'Pas assez de bateaux de transport!', 'warning');
-            return;
-        }
-    }
-
     const villes = getVillesJoueur();
     const ville = villes.find(function(v) { return v.id === sourceId; });
     const villeNom = ville ? ville.name : ('Ville ' + sourceId);
