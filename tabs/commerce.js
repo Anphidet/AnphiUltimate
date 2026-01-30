@@ -54,37 +54,38 @@ function getMarketplaceLevel(townId) {
     try {
         const tid = townId || getCurrentCityId();
         
+        const buildings = uw.MM.getModels().Buildings;
+        if (buildings && buildings[tid]) {
+            const townBuildings = buildings[tid];
+            if (townBuildings.attributes && townBuildings.attributes.market) {
+                return townBuildings.attributes.market;
+            }
+            if (townBuildings.market) {
+                return townBuildings.market;
+            }
+        }
+        
         const town = uw.ITowns.getTown(tid);
         if (town) {
             if (typeof town.buildings === 'function') {
-                const buildings = town.buildings();
-                if (buildings && buildings.market) return buildings.market;
+                const b = town.buildings();
+                if (b && b.market) return b.market;
             }
-            if (town.getBuildings) {
-                const buildings = town.getBuildings();
-                if (buildings && buildings.market) return buildings.market;
+            if (typeof town.getBuildings === 'function') {
+                const b = town.getBuildings();
+                if (b && b.market) return b.market;
             }
-        }
-        
-        const townModel = uw.MM.getModels().Town[tid];
-        if (townModel?.attributes?.buildings?.market) {
-            return townModel.attributes.buildings.market;
-        }
-        
-        const buildings = uw.MM.getModels().Buildings;
-        if (buildings) {
-            for (let id in buildings) {
-                const b = buildings[id];
-                if (b?.attributes?.town_id === tid && b?.attributes?.market) {
-                    return b.attributes.market;
-                }
+            if (town.buildings && typeof town.buildings !== 'function') {
+                if (town.buildings.market) return town.buildings.market;
             }
         }
         
-        const playerBuildings = uw.MM.getModels().PlayerBuildings;
-        if (playerBuildings && playerBuildings[tid]) {
-            const pb = playerBuildings[tid];
-            if (pb?.attributes?.market) return pb.attributes.market;
+        const townModel = uw.MM.getModels().Town;
+        if (townModel && townModel[tid]) {
+            const tm = townModel[tid];
+            if (tm.attributes?.buildings?.market) {
+                return tm.attributes.buildings.market;
+            }
         }
         
     } catch(e) { 
