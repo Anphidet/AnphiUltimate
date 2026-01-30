@@ -1159,15 +1159,16 @@ function trySendViaGpAjax(sourceId, destId, wood, stone, iron, csrfToken, callba
             log('COMMERCE', 'gpAjax.ajaxPost trouve', 'info');
             
             const postData = {
-                id: sourceId,
+                id: destId,
                 wood: wood,
                 stone: stone,
                 iron: iron,
-                town_id: destId,
+                town_id: sourceId,
                 nl_init: true
             };
             
             log('COMMERCE', 'gpAjax JSON: ' + JSON.stringify(postData), 'info');
+            log('COMMERCE', 'Source (town_id URL): ' + sourceId + ' -> Destination (id): ' + destId, 'info');
             
             uw.gpAjax.ajaxPost(
                 'town_info',
@@ -1189,7 +1190,7 @@ function trySendViaGpAjax(sourceId, destId, wood, stone, iron, csrfToken, callba
                         callback(false);
                     }
                 },
-                { town_id: destId }
+                { town_id: sourceId }
             );
             return true;
         }
@@ -1204,20 +1205,20 @@ function trySendViaDirectAjax(sourceId, destId, wood, stone, iron, csrfToken, ca
     log('COMMERCE', 'Tentative via Ajax direct (town_info/trade)...', 'info');
     
     const postData = {
-        id: sourceId,
+        id: destId,
         wood: wood,
         stone: stone,
         iron: iron,
-        town_id: destId,
+        town_id: sourceId,
         nl_init: true
     };
     
     log('COMMERCE', 'JSON: ' + JSON.stringify(postData), 'info');
-    log('COMMERCE', 'URL: /game/town_info?town_id=' + destId + '&action=trade', 'info');
+    log('COMMERCE', 'URL: /game/town_info?town_id=' + sourceId + '&action=trade (Source: ' + sourceId + ' -> Dest: ' + destId + ')', 'info');
     
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_info?town_id=' + destId + '&action=trade&h=' + csrfToken,
+        url: '/game/town_info?town_id=' + sourceId + '&action=trade&h=' + csrfToken,
         data: { json: JSON.stringify(postData) },
         dataType: 'json',
         success: function(response) {
@@ -1257,9 +1258,12 @@ function tryAlternativeMethod(sourceId, destId, wood, stone, iron, csrfToken, ca
         nl_init: true
     };
     
+    log('COMMERCE', 'Alt JSON: ' + JSON.stringify(altPostData), 'info');
+    log('COMMERCE', 'Alt URL: /game/town_overviews?town_id=' + sourceId + ' (from: ' + sourceId + ' -> to: ' + destId + ')', 'info');
+    
     uw.$.ajax({
         type: 'POST',
-        url: '/game/town_overviews?town_id=' + destId + '&action=trade_between_own_towns&h=' + csrfToken,
+        url: '/game/town_overviews?town_id=' + sourceId + '&action=trade_between_own_towns&h=' + csrfToken,
         data: { json: JSON.stringify(altPostData) },
         dataType: 'json',
         success: function(response) {
