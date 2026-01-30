@@ -1023,6 +1023,21 @@ function executerProchainEnvoi() {
     
     majStatus('Envoi depuis ' + getTownName(source.sourceId) + '...');
     
+    const canSend = verifierPeutEnvoyer(source.sourceId, source.wood, source.stone, source.iron);
+    
+    if (!canSend.possible) {
+        source.status = 'erreur';
+        log('COMMERCE', '[' + getTownName(source.sourceId) + '] Skip - ' + canSend.raison, 'warning');
+        
+        commerceData.planEnCours.sourceIndex++;
+        saveData();
+        
+        if (commerceData.plansActifs[plan.id]) {
+            setTimeout(executerProchainEnvoi, 500);
+        }
+        return;
+    }
+    
     envoyerRessources(source.sourceId, plan.destinationId, source.wood, source.stone, source.iron, function(success) {
         if (success) {
             source.status = 'envoye';
@@ -1043,6 +1058,31 @@ function executerProchainEnvoi() {
             majStatus('Prochain envoi dans ' + formatDelai(plan.delai));
         }
     });
+}
+
+function verifierPeutEnvoyer(sourceId, wood, stone, iron) {
+    const res = getResources(sourceId);
+    const totalDemande = wood + stone + iron;
+    
+    if (wood > 0 && res.wood < wood) {
+        return { possible: false, raison: 'Bois insuffisant (' + res.wood + '/' + wood + ')' };
+    }
+    if (stone > 0 && res.stone < stone) {
+        return { possible: false, raison: 'Pierre insuffisante (' + res.stone + '/' + stone + ')' };
+    }
+    if (iron > 0 && res.iron < iron) {
+        return { possible: false, raison: 'Argent insuffisant (' + res.iron + '/' + iron + ')' };
+    }
+    
+    const maxCapacity = getTradeCapacity(sourceId);
+    const usedCapacity = getTradesInProgress(sourceId);
+    const availableCapacity = maxCapacity - usedCapacity;
+    
+    if (totalDemande > availableCapacity) {
+        return { possible: false, raison: 'Capacite commerce insuffisante (' + availableCapacity + '/' + totalDemande + ')' };
+    }
+    
+    return { possible: true, raison: 'OK' };
 }
 
 function envoyerRessources(sourceId, destId, wood, stone, iron, callback) {
