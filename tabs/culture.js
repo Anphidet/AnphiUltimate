@@ -178,51 +178,49 @@ function getGoldForPlayer() {
 
 function getBattlePointsForPlayer() {
     try {
-        if (uw.MM && uw.MM.getOnlyCollectionByName) {
-            const playerLedger = uw.MM.getOnlyCollectionByName('PlayerLedger');
-            if (playerLedger && playerLedger.models && playerLedger.models.length > 0) {
-                const model = playerLedger.models[0];
-                for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
-                    const bp = model.get(attr);
-                    if (bp !== undefined && bp !== null && typeof bp === 'number') {
-                        console.log(`[CULTURE] BP via PlayerLedger.get('${attr}'):`, bp);
-                        return bp;
+        const models = uw.MM.getModels();
+        
+        if (models.PlayerKillpoints) {
+            for (let id in models.PlayerKillpoints) {
+                const obj = models.PlayerKillpoints[id];
+                if (obj && typeof obj.get === 'function') {
+                    const att = obj.get('att');
+                    if (att !== undefined && att !== null && typeof att === 'number') {
+                        console.log('[CULTURE] BP via PlayerKillpoints.get(att):', att);
+                        return att;
                     }
                 }
-                if (model.attributes) {
-                    for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
-                        if (model.attributes[attr] !== undefined) {
-                            console.log(`[CULTURE] BP via PlayerLedger.attributes.${attr}:`, model.attributes[attr]);
-                            return model.attributes[attr];
-                        }
-                    }
+                if (obj && obj.attributes && obj.attributes.att !== undefined) {
+                    console.log('[CULTURE] BP via PlayerKillpoints.attributes.att:', obj.attributes.att);
+                    return obj.attributes.att;
                 }
             }
         }
         
-        const models = uw.MM.getModels();
+        if (uw.MM && uw.MM.getOnlyCollectionByName) {
+            const killpoints = uw.MM.getOnlyCollectionByName('PlayerKillpoints');
+            if (killpoints && killpoints.models && killpoints.models.length > 0) {
+                const model = killpoints.models[0];
+                const att = model.get('att');
+                if (att !== undefined && att !== null) {
+                    console.log('[CULTURE] BP via PlayerKillpoints collection.get(att):', att);
+                    return att;
+                }
+            }
+        }
         
-        const bpModels = ['PlayerLedger', 'PlayerKillpoints', 'Player', 'Killpoints'];
+        const bpModels = ['PlayerLedger', 'Player', 'Killpoints'];
         for (let modelName of bpModels) {
             if (models[modelName]) {
                 for (let id in models[modelName]) {
                     const obj = models[modelName][id];
                     
                     if (obj && typeof obj.get === 'function') {
-                        for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def']) {
+                        for (let attr of ['att', 'battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
                             const val = obj.get(attr);
                             if (val !== undefined && val !== null && typeof val === 'number') {
                                 console.log(`[CULTURE] BP via ${modelName}.get('${attr}'):`, val);
                                 return val;
-                            }
-                        }
-                    }
-                    
-                    if (obj && obj.attributes) {
-                        for (let attr of ['battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def']) {
-                            if (obj.attributes[attr] !== undefined && typeof obj.attributes[attr] === 'number') {
-                                console.log(`[CULTURE] BP via ${modelName}.attributes.${attr}:`, obj.attributes[attr]);
-                                return obj.attributes[attr];
                             }
                         }
                     }
@@ -233,15 +231,6 @@ function getBattlePointsForPlayer() {
         if (uw.Game && uw.Game.player_killpoints !== undefined) {
             console.log('[CULTURE] BP via Game.player_killpoints:', uw.Game.player_killpoints);
             return uw.Game.player_killpoints;
-        }
-        
-        const domBp = document.querySelector('.battle_points_amount, .killpoints_amount, #battle_points_count');
-        if (domBp) {
-            const bpText = domBp.textContent.replace(/[^0-9]/g, '');
-            if (bpText) {
-                console.log('[CULTURE] BP via DOM:', parseInt(bpText));
-                return parseInt(bpText);
-            }
         }
         
         console.log('[CULTURE] BP non trouve');
@@ -527,44 +516,93 @@ function startCelebration(townId, celebrationId, callback) {
     
     log('CULTURE', `[${getTownNameById(townId)}] Lancement ${celebration.name}...`, 'info');
     
+    if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
+        console.log('[CULTURE] Methode gpAjax...');
+        try {
+            uw.gpAjax.ajaxPost(
+                'building_place',
+                'start_trainer',
+                {
+                    trainer_id: celebrationId,
+                    town_id: townId
+                },
+                true,
+                function(response) {
+                    console.log('[CULTURE] gpAjax Response:', response);
+                    handleCelebrationResponse(response, townId, celebration, callback);
+                },
+                { town_id: townId }
+            );
+            return;
+        } catch(e) {
+            console.log('[CULTURE] gpAjax erreur:', e);
+        }
+    }
+    
+    console.log('[CULTURE] Methode Ajax directe...');
     uw.$.ajax({
         type: 'POST',
-        url: `/game/building_place?town_id=${townId}&action=culture&h=${csrfToken}`,
+        url: `/game/building_place?town_id=${townId}&action=start_trainer&h=${csrfToken}`,
         data: { 
             json: JSON.stringify({ 
-                celebration_type: celebrationId,
+                trainer_id: celebrationId,
                 town_id: townId,
                 nl_init: true 
             }) 
         },
         dataType: 'json',
         success: function(response) {
-            console.log('[CULTURE] Response:', response);
-            
-            if (response?.json?.error) {
-                log('CULTURE', `[${getTownNameById(townId)}] Erreur ${celebration.name}: ${response.json.error}`, 'error');
-                if (callback) callback(false);
-                return;
-            }
-            
-            cultureData.stats.totalCelebrations++;
-            cultureData.stats.lastCelebration = {
-                town: getTownNameById(townId),
-                type: celebration.name,
-                time: Date.now()
-            };
-            saveData();
-            updateStats();
-            
-            log('CULTURE', `[${getTownNameById(townId)}] ${celebration.icon} ${celebration.name} lance!`, 'success');
-            if (callback) callback(true);
+            console.log('[CULTURE] Ajax Response:', response);
+            handleCelebrationResponse(response, townId, celebration, callback);
         },
         error: function(xhr, status, error) {
-            console.log('[CULTURE] Ajax Error:', xhr, status, error);
-            log('CULTURE', `[${getTownNameById(townId)}] Erreur reseau: ${error}`, 'error');
-            if (callback) callback(false);
+            console.log('[CULTURE] Ajax Error:', xhr.responseText, status, error);
+            
+            console.log('[CULTURE] Tentative methode alternative...');
+            uw.$.ajax({
+                type: 'POST',
+                url: `/game/building_place?town_id=${townId}&action=culture&h=${csrfToken}`,
+                data: { 
+                    json: JSON.stringify({ 
+                        celebration_type: celebrationId,
+                        town_id: townId,
+                        nl_init: true 
+                    }) 
+                },
+                dataType: 'json',
+                success: function(response2) {
+                    console.log('[CULTURE] Alt Response:', response2);
+                    handleCelebrationResponse(response2, townId, celebration, callback);
+                },
+                error: function(xhr2, status2, error2) {
+                    console.log('[CULTURE] Alt Error:', xhr2.responseText, status2, error2);
+                    log('CULTURE', `[${getTownNameById(townId)}] Erreur reseau: ${error2}`, 'error');
+                    if (callback) callback(false);
+                }
+            });
         }
     });
+}
+
+function handleCelebrationResponse(response, townId, celebration, callback) {
+    if (response?.json?.error || response?.error) {
+        const errorMsg = response?.json?.error || response?.error;
+        log('CULTURE', `[${getTownNameById(townId)}] Erreur ${celebration.name}: ${errorMsg}`, 'error');
+        if (callback) callback(false);
+        return;
+    }
+    
+    cultureData.stats.totalCelebrations++;
+    cultureData.stats.lastCelebration = {
+        town: getTownNameById(townId),
+        type: celebration.name,
+        time: Date.now()
+    };
+    saveData();
+    updateStats();
+    
+    log('CULTURE', `[${getTownNameById(townId)}] ${celebration.icon} ${celebration.name} lance!`, 'success');
+    if (callback) callback(true);
 }
 
 function getTownSettings(townId) {
