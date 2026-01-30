@@ -55,27 +55,43 @@ function getUnitsInTown() { try { const ct = uw.ITowns.getCurrentTown(); return 
 
 function getDocksLevel() {
     try {
+        const townId = getCurrentCityId();
+        if (!townId) return -1;
+        
         const ct = uw.ITowns.getCurrentTown();
-        if (ct && ct.buildings) {
-            const buildings = ct.buildings();
-            if (buildings) {
-                const docks = buildings.docks ?? buildings.port ?? buildings['docks'] ?? buildings['port'];
-                if (docks !== undefined && docks !== null) {
-                    return parseInt(docks, 10);
+        if (ct) {
+            if (typeof ct.getBuildings === 'function') {
+                const b = ct.getBuildings();
+                if (b && typeof b.get === 'function') {
+                    const docks = b.get('docks');
+                    if (typeof docks === 'number') return docks;
+                }
+                if (b && typeof b.docks === 'number') return b.docks;
+            }
+            
+            if (typeof ct.buildings === 'function') {
+                const buildings = ct.buildings();
+                if (buildings && typeof buildings.get === 'function') {
+                    const docks = buildings.get('docks');
+                    if (typeof docks === 'number') return docks;
+                }
+                if (buildings && typeof buildings.docks === 'number') return buildings.docks;
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.Town && models.Town[townId]) {
+                const townModel = models.Town[townId];
+                if (townModel.attributes && townModel.attributes.buildings) {
+                    const b = townModel.attributes.buildings;
+                    if (typeof b.docks === 'number') return b.docks;
                 }
             }
         }
-        const town = getCurrentTown();
-        if (town?.attributes?.buildings) {
-            const b = town.attributes.buildings;
-            const docks = b.docks ?? b.port ?? b['docks'] ?? b['port'];
-            if (docks !== undefined && docks !== null) {
-                return parseInt(docks, 10);
-            }
-        }
+        
         return -1;
     } catch(e) { 
-        log('NAVAL', 'Erreur getDocksLevel: ' + e.message, 'error');
         return -1; 
     }
 }
@@ -97,12 +113,55 @@ function isShipAvailable(unitId) {
             if (!hasResearch(shipResearchRequirements[unitId])) return false;
         }
         
-        const docksLevel = getDocksLevel();
-        const requiredLevel = shipBuildingRequirements[unitId] || 1;
-        if (docksLevel < requiredLevel) return false;
-        
         return true;
     } catch(e) { return false; }
+}
+
+function getAllNavalUnits() {
+    const ships = [];
+    try {
+        const allShips = [...NAVAL_UNITS, ...MYTHICAL_SHIPS];
+        for (let id of allShips) {
+            const unitData = uw.GameData.units[id];
+            if (unitData && unitData.is_naval) {
+                ships.push({ id, name: unitData.name, resources: unitData.resources });
+            }
+        }
+    } catch(e) {}
+    return ships;
+}
+
+function getUnitsInQueue() {
+    const queued = {};
+    try {
+        const ct = uw.ITowns.getCurrentTown();
+        if (ct && ct.getDocksOrders) {
+            const orders = ct.getDocksOrders();
+            if (orders && orders.length) {
+                orders.forEach(order => {
+                    const unitId = order.getUnitId ? order.getUnitId() : order.unit_id;
+                    const count = order.getCount ? order.getCount() : order.count || 1;
+                    queued[unitId] = (queued[unitId] || 0) + count;
+                });
+            }
+        }
+        
+        if (Object.keys(queued).length === 0 && uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            const townId = getCurrentCityId();
+            if (models.DocksOrder) {
+                for (let id in models.DocksOrder) {
+                    const order = models.DocksOrder[id];
+                    if (order.attributes && order.attributes.town_id == townId) {
+                        const unitId = order.attributes.unit_id;
+                        const count = order.attributes.count || 1;
+                        queued[unitId] = (queued[unitId] || 0) + count;
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+    return queued;
 }
 
 function getAvailableShips() {
@@ -142,10 +201,7 @@ module.render = function(container) {
         </div>
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:12px;margin-bottom:15px;display:flex;align-items:center;gap:12px;">
             <span style="font-size:22px;">⚓</span>
-            <div>
-                <span id="naval-city-name" style="font-family:Cinzel,serif;font-size:15px;color:#F5DEB3;">${getCurrentTownName()}</span>
-                <div style="font-size:11px;color:#8B8B83;"><span id="naval-docks-label">Port niveau</span> <span id="naval-docks-level">${getDocksLevel() >= 0 ? getDocksLevel() : 'Aucun'}</span></div>
-            </div>
+            <span id="naval-city-name" style="font-family:Cinzel,serif;font-size:15px;color:#F5DEB3;">${getCurrentTownName()}</span>
         </div>
         <div class="bot-section">
             <div class="section-header">
@@ -333,16 +389,15 @@ module.isActive = function() {
 };
 
 module.onActivate = function(container) {
-    updateShipsGrid();
-    updateTargetsGrid();
-    updateQueueDisplay();
-    updatePlansList();
-    updateStats();
-    const nameEl = document.getElementById('naval-city-name');
-    if (nameEl) nameEl.textContent = getCurrentTownName();
-    const docksEl = document.getElementById('naval-docks-level');
-    const docksLevel = getDocksLevel();
-    if (docksEl) docksEl.textContent = docksLevel >= 0 ? docksLevel : 'Aucun';
+    setTimeout(function() {
+        updateShipsGrid();
+        updateTargetsGrid();
+        updateQueueDisplay();
+        updatePlansList();
+        updateStats();
+        const nameEl = document.getElementById('naval-city-name');
+        if (nameEl) nameEl.textContent = getCurrentTownName();
+    }, 100);
 };
 
 function toggleNaval(enabled) {
@@ -371,57 +426,54 @@ function updateShipsGrid() {
     const grid = document.getElementById('naval-units-grid');
     if (!grid) return;
     
-    const docksLevel = getDocksLevel();
+    const ships = getAllNavalUnits();
+    const unitsInTown = getUnitsInTown();
     
-    if (docksLevel < 0) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#E53935;font-style:italic;padding:20px;">Pas de port dans cette ville</div>';
-        return;
-    }
-    
-    const ships = getAvailableShips();
     if (!ships.length) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#FF9800;font-style:italic;padding:20px;">Port niveau ' + docksLevel + ' - Ameliorez le port pour debloquer des bateaux</div>';
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
         return;
     }
     
-    grid.innerHTML = ships.map(u => `
+    grid.innerHTML = ships.map(u => {
+        const count = unitsInTown[u.id] || 0;
+        return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
-            <div style="font-size:9px;color:#BDB76B;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
+            <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;">${count}</div>
             <input type="number" class="naval-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
-    `).join('');
+    `}).join('');
 }
 
 function updateTargetsGrid() {
     const grid = document.getElementById('naval-targets-grid');
     if (!grid) return;
     
-    const docksLevel = getDocksLevel();
-    const ships = getAvailableShips();
+    const ships = getAllNavalUnits();
     const cityId = getCurrentCityId();
     const targets = navalData.targets[cityId] || {};
     const unitsInTown = getUnitsInTown();
-    
-    if (docksLevel < 0) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#E53935;font-style:italic;padding:20px;">Pas de port dans cette ville</div>';
-        return;
-    }
+    const unitsInQueue = getUnitsInQueue();
     
     if (!ships.length) {
-        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#FF9800;font-style:italic;padding:20px;">Port niveau ' + docksLevel + ' - Ameliorez le port pour debloquer des bateaux</div>';
+        grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
         return;
     }
     
     grid.innerHTML = ships.map(u => {
         const current = unitsInTown[u.id] || 0;
+        const queued = unitsInQueue[u.id] || 0;
+        const total = current + queued;
         const target = targets[u.id] || 0;
-        const color = current >= target ? '#4CAF50' : '#FF9800';
+        const isComplete = total >= target && target > 0;
+        const color = target === 0 ? '#8B8B83' : (isComplete ? '#4CAF50' : '#FF9800');
+        const queueText = queued > 0 ? ` <span style="color:#64B5F6;">(+${queued})</span>` : '';
         return `
-        <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
+        <div style="background:rgba(0,0,0,0.3);border:1px solid ${isComplete ? 'rgba(76,175,80,0.5)' : 'rgba(212,175,55,0.3)'};border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:10px;color:${color};margin-bottom:4px;">${current} / <span class="target-display" data-unit="${u.id}">${target}</span></div>
+            <div style="font-size:10px;color:${color};margin-bottom:4px;">${current}${queueText} / <span class="target-display" data-unit="${u.id}">${target}</span></div>
             <input type="number" class="naval-target-input option-input" data-unit="${u.id}" value="${target}" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
@@ -809,9 +861,6 @@ function setupTownChangeObserver() {
             setTimeout(() => {
                 const nameEl = document.getElementById('naval-city-name');
                 if (nameEl) nameEl.textContent = getCurrentTownName();
-                const docksEl = document.getElementById('naval-docks-level');
-                const docksLevel = getDocksLevel();
-                if (docksEl) docksEl.textContent = docksLevel >= 0 ? docksLevel : 'Aucun';
                 updateShipsGrid();
                 updateTargetsGrid();
                 updateQueueDisplay();
