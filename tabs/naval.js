@@ -157,6 +157,94 @@ function getUnitsInQueue() {
     return queued;
 }
 
+function getGlobalUnits() {
+    const globalUnits = {};
+    try {
+        const townId = getCurrentCityId();
+        const ct = uw.ITowns.getCurrentTown();
+        
+        const inTown = getUnitsInTown();
+        for (let unitId in inTown) {
+            if (inTown[unitId] > 0) {
+                globalUnits[unitId] = (globalUnits[unitId] || 0) + inTown[unitId];
+            }
+        }
+        
+        if (ct && typeof ct.unitsOuter === 'function') {
+            const outer = ct.unitsOuter();
+            if (outer) {
+                for (let unitId in outer) {
+                    if (outer[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outer[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (ct && typeof ct.unitsOuterTown === 'function') {
+            const outerTown = ct.unitsOuterTown();
+            if (outerTown) {
+                for (let unitId in outerTown) {
+                    if (outerTown[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outerTown[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (ct && typeof ct.unitsSupport === 'function') {
+            const support = ct.unitsSupport();
+            if (support) {
+                for (let unitId in support) {
+                    if (support[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + support[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            
+            if (models.CommandsNaval || models.MovementsNavalUnits) {
+                const cmdModel = models.CommandsNaval || models.MovementsNavalUnits;
+                for (let id in cmdModel) {
+                    const cmd = cmdModel[id];
+                    const attrs = cmd.attributes || cmd;
+                    if (attrs.origin_town_id == townId || attrs.home_town_id == townId) {
+                        const units = attrs.units || {};
+                        for (let unitId in units) {
+                            if (units[unitId] > 0) {
+                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (models.Movements || models.Commands) {
+                const mvModel = models.Movements || models.Commands;
+                for (let id in mvModel) {
+                    const mv = mvModel[id];
+                    const attrs = mv.attributes || mv;
+                    if ((attrs.origin_town_id == townId || attrs.home_town_id == townId) && attrs.units) {
+                        const units = attrs.units;
+                        for (let unitId in units) {
+                            if (units[unitId] > 0 && (NAVAL_UNITS.includes(unitId) || MYTHICAL_SHIPS.includes(unitId))) {
+                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+    } catch(e) {
+        log('NAVAL', 'Erreur getGlobalUnits: ' + e.message, 'warning');
+    }
+    return globalUnits;
+}
+
 function getAvailableShips() {
     const ships = [];
     try {
@@ -427,6 +515,7 @@ function updateShipsGrid() {
     
     const ships = getAllNavalUnits();
     const unitsInTown = getUnitsInTown();
+    const globalUnits = getGlobalUnits();
     
     if (!ships.length) {
         grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
@@ -434,12 +523,15 @@ function updateShipsGrid() {
     }
     
     grid.innerHTML = ships.map(u => {
-        const count = unitsInTown[u.id] || 0;
+        const inTown = unitsInTown[u.id] || 0;
+        const total = globalUnits[u.id] || 0;
+        const outside = total - inTown;
+        const outsideText = outside > 0 ? ` <span style="color:#FF9800;font-size:9px;">(${outside} hors)</span>` : '';
         return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;">${count}</div>
+            <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;">${inTown}${outsideText}</div>
             <input type="number" class="naval-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
@@ -454,6 +546,7 @@ function updateTargetsGrid() {
     const targets = navalData.targets[cityId] || {};
     const unitsInTown = getUnitsInTown();
     const unitsInQueue = getUnitsInQueue();
+    const globalUnits = getGlobalUnits();
     
     if (!ships.length) {
         grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
@@ -461,18 +554,22 @@ function updateTargetsGrid() {
     }
     
     grid.innerHTML = ships.map(u => {
-        const current = unitsInTown[u.id] || 0;
+        const inTown = unitsInTown[u.id] || 0;
         const queued = unitsInQueue[u.id] || 0;
-        const total = current + queued;
+        const totalGlobal = globalUnits[u.id] || 0;
+        const outside = totalGlobal - inTown;
+        const grandTotal = totalGlobal + queued;
         const target = targets[u.id] || 0;
-        const isComplete = total >= target && target > 0;
+        const isComplete = grandTotal >= target && target > 0;
         const color = target === 0 ? '#8B8B83' : (isComplete ? '#4CAF50' : '#FF9800');
-        const queueText = queued > 0 ? ` <span style="color:#64B5F6;">(+${queued})</span>` : '';
+        const queueText = queued > 0 ? `<span style="color:#64B5F6;">(+${queued})</span>` : '';
+        const outsideText = outside > 0 ? `<span style="color:#FF9800;">(${outside}⚓)</span>` : '';
         return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid ${isComplete ? 'rgba(76,175,80,0.5)' : 'rgba(212,175,55,0.3)'};border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:10px;color:${color};margin-bottom:4px;">${current}${queueText} / <span class="target-display" data-unit="${u.id}">${target}</span></div>
+            <div style="font-size:9px;color:${color};margin-bottom:4px;">${inTown} ${outsideText} ${queueText}</div>
+            <div style="font-size:10px;color:${color};margin-bottom:4px;">Total: ${grandTotal} / ${target}</div>
             <input type="number" class="naval-target-input option-input" data-unit="${u.id}" value="${target}" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
@@ -864,72 +961,83 @@ function debugNavalInfo() {
         log('NAVAL', 'Town ID: ' + townId, 'info');
         log('NAVAL', 'Town Name: ' + getCurrentTownName(), 'info');
         
-        log('NAVAL', '--- Methods disponibles sur CurrentTown ---', 'info');
+        log('NAVAL', '--- Methods sur CurrentTown (unit/beyond/outside/all) ---', 'info');
         const methods = [];
         for (let key in ct) {
-            if (typeof ct[key] === 'function' && (key.includes('dock') || key.includes('Dock') || key.includes('order') || key.includes('Order') || key.includes('unit') || key.includes('Unit'))) {
-                methods.push(key);
+            if (typeof ct[key] === 'function') {
+                const k = key.toLowerCase();
+                if (k.includes('unit') || k.includes('beyond') || k.includes('outside') || k.includes('all') || k.includes('total') || k.includes('global') || k.includes('support') || k.includes('foreign')) {
+                    methods.push(key);
+                }
             }
         }
         log('NAVAL', 'Methods: ' + methods.join(', '), 'info');
         
-        log('NAVAL', '--- docksOrders ---', 'info');
-        if (typeof ct.docksOrders === 'function') {
-            const orders = ct.docksOrders();
-            log('NAVAL', 'docksOrders() type: ' + typeof orders, 'info');
-            if (orders) {
-                log('NAVAL', 'docksOrders() keys: ' + Object.keys(orders).join(', '), 'info');
-                if (orders.models) {
-                    log('NAVAL', 'docksOrders().models.length: ' + orders.models.length, 'info');
-                    if (orders.models.length > 0) {
-                        log('NAVAL', 'Premier ordre: ' + JSON.stringify(orders.models[0].attributes || orders.models[0]), 'info');
-                    }
-                } else if (orders.length !== undefined) {
-                    log('NAVAL', 'docksOrders().length: ' + orders.length, 'info');
-                    if (orders.length > 0) {
-                        log('NAVAL', 'Premier ordre: ' + JSON.stringify(orders[0].attributes || orders[0]), 'info');
+        methods.forEach(m => {
+            try {
+                const result = ct[m]();
+                if (result && typeof result === 'object') {
+                    const keys = Object.keys(result);
+                    if (keys.length > 0 && keys.length < 30) {
+                        log('NAVAL', m + '(): ' + JSON.stringify(result), 'info');
+                    } else {
+                        log('NAVAL', m + '(): ' + keys.length + ' keys - ' + keys.slice(0, 10).join(', '), 'info');
                     }
                 }
-            }
-        } else {
-            log('NAVAL', 'docksOrders non disponible', 'warning');
-        }
+            } catch(e) {}
+        });
         
-        log('NAVAL', '--- MM.getModels ---', 'info');
+        log('NAVAL', '--- MM.getModels (Unit/Movement/Command/Support) ---', 'info');
         if (uw.MM && uw.MM.getModels) {
             const models = uw.MM.getModels();
             const modelKeys = Object.keys(models);
-            const orderModels = modelKeys.filter(k => k.includes('Order') || k.includes('order'));
-            log('NAVAL', 'Models avec Order: ' + orderModels.join(', '), 'info');
             
-            orderModels.forEach(modelName => {
+            const relevantModels = modelKeys.filter(k => {
+                const kl = k.toLowerCase();
+                return kl.includes('unit') || kl.includes('movement') || kl.includes('command') || 
+                       kl.includes('support') || kl.includes('troop') || kl.includes('army');
+            });
+            log('NAVAL', 'Models pertinents: ' + relevantModels.join(', '), 'info');
+            
+            relevantModels.forEach(modelName => {
                 const model = models[modelName];
                 const count = Object.keys(model).length;
                 log('NAVAL', modelName + ': ' + count + ' entrees', 'info');
-                if (count > 0) {
+                if (count > 0 && count < 10) {
+                    for (let id in model) {
+                        const item = model[id];
+                        const attrs = item.attributes || item;
+                        if (attrs.town_id == townId || attrs.home_town_id == townId || attrs.origin_town_id == townId) {
+                            log('NAVAL', modelName + '[' + id + ']: ' + JSON.stringify(attrs), 'info');
+                        }
+                    }
+                } else if (count > 0) {
                     const firstKey = Object.keys(model)[0];
                     const first = model[firstKey];
                     if (first && first.attributes) {
-                        log('NAVAL', modelName + ' exemple: ' + JSON.stringify(first.attributes), 'info');
+                        log('NAVAL', modelName + ' exemple attrs keys: ' + Object.keys(first.attributes).join(', '), 'info');
                     }
                 }
             });
+            
+            log('NAVAL', '--- Tous les models disponibles ---', 'info');
+            log('NAVAL', 'Total: ' + modelKeys.length + ' - ' + modelKeys.join(', '), 'info');
         }
         
-        log('NAVAL', '--- Units in town ---', 'info');
+        log('NAVAL', '--- Units dans la ville ---', 'info');
         const units = getUnitsInTown();
         const navalUnits = {};
-        NAVAL_UNITS.forEach(id => {
-            if (units[id]) navalUnits[id] = units[id];
-        });
-        MYTHICAL_SHIPS.forEach(id => {
-            if (units[id]) navalUnits[id] = units[id];
-        });
-        log('NAVAL', 'Naval units: ' + JSON.stringify(navalUnits), 'info');
+        NAVAL_UNITS.forEach(id => { if (units[id]) navalUnits[id] = units[id]; });
+        MYTHICAL_SHIPS.forEach(id => { if (units[id]) navalUnits[id] = units[id]; });
+        log('NAVAL', 'Naval units (in town): ' + JSON.stringify(navalUnits), 'info');
         
-        log('NAVAL', '--- Queue detection result ---', 'info');
+        log('NAVAL', '--- Units en queue ---', 'info');
         const queued = getUnitsInQueue();
         log('NAVAL', 'Queued units: ' + JSON.stringify(queued), 'info');
+        
+        log('NAVAL', '--- Units globales (test) ---', 'info');
+        const globalUnits = getGlobalUnits();
+        log('NAVAL', 'Global units: ' + JSON.stringify(globalUnits), 'info');
         
         log('NAVAL', '=== FIN DEBUG ===', 'info');
         
