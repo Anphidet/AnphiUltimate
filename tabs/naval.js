@@ -59,28 +59,23 @@ function getDocksLevel() {
         if (ct && ct.buildings) {
             const buildings = ct.buildings();
             if (buildings) {
-                if (typeof buildings.docks !== 'undefined') {
-                    return buildings.docks;
-                }
-                if (typeof buildings.port !== 'undefined') {
-                    return buildings.port;
+                const docks = buildings.docks ?? buildings.port ?? buildings['docks'] ?? buildings['port'];
+                if (docks !== undefined && docks !== null) {
+                    return parseInt(docks, 10);
                 }
             }
         }
         const town = getCurrentTown();
         if (town?.attributes?.buildings) {
             const b = town.attributes.buildings;
-            if (typeof b.docks !== 'undefined') {
-                return b.docks;
-            }
-            if (typeof b.port !== 'undefined') {
-                return b.port;
+            const docks = b.docks ?? b.port ?? b['docks'] ?? b['port'];
+            if (docks !== undefined && docks !== null) {
+                return parseInt(docks, 10);
             }
         }
-        log('NAVAL', 'DEBUG: Aucun port trouve - buildings: ' + JSON.stringify(ct?.buildings ? ct.buildings() : 'N/A'), 'warning');
         return -1;
     } catch(e) { 
-        log('NAVAL', 'DEBUG: Erreur getDocksLevel: ' + e.message, 'error');
+        log('NAVAL', 'Erreur getDocksLevel: ' + e.message, 'error');
         return -1; 
     }
 }
