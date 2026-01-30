@@ -516,6 +516,7 @@ function updateShipsGrid() {
     const ships = getAllNavalUnits();
     const unitsInTown = getUnitsInTown();
     const globalUnits = getGlobalUnits();
+    const unitsInQueue = getUnitsInQueue();
     
     if (!ships.length) {
         grid.innerHTML = '<div style="grid-column:span 4;text-align:center;color:#8B8B83;font-style:italic;padding:20px;">Aucun bateau disponible</div>';
@@ -526,12 +527,14 @@ function updateShipsGrid() {
         const inTown = unitsInTown[u.id] || 0;
         const total = globalUnits[u.id] || 0;
         const outside = total - inTown;
-        const outsideText = outside > 0 ? ` <span style="color:#FF9800;font-size:9px;">(${outside} hors)</span>` : '';
+        const queued = unitsInQueue[u.id] || 0;
         return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(212,175,55,0.3);border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:11px;color:#4CAF50;margin-bottom:4px;">${inTown}${outsideText}</div>
+            <div style="font-size:10px;margin-bottom:4px;">
+                <span style="color:#4CAF50;">${inTown}</span>${outside > 0 ? ` + <span style="color:#FF9800;">${outside}</span>` : ''}${queued > 0 ? ` + <span style="color:#64B5F6;">${queued}</span>` : ''}
+            </div>
             <input type="number" class="naval-unit-input option-input" data-unit="${u.id}" value="0" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
@@ -561,15 +564,15 @@ function updateTargetsGrid() {
         const grandTotal = totalGlobal + queued;
         const target = targets[u.id] || 0;
         const isComplete = grandTotal >= target && target > 0;
-        const color = target === 0 ? '#8B8B83' : (isComplete ? '#4CAF50' : '#FF9800');
-        const queueText = queued > 0 ? `<span style="color:#64B5F6;">(+${queued})</span>` : '';
-        const outsideText = outside > 0 ? `<span style="color:#FF9800;">(${outside}⚓)</span>` : '';
+        const targetColor = target === 0 ? '#8B8B83' : (isComplete ? '#4CAF50' : '#FF9800');
         return `
         <div style="background:rgba(0,0,0,0.3);border:1px solid ${isComplete ? 'rgba(76,175,80,0.5)' : 'rgba(212,175,55,0.3)'};border-radius:6px;padding:8px;text-align:center;">
             <div class="unit_icon50x50 ${u.id}" style="width:50px;height:50px;margin:0 auto 4px;transform:scale(0.8);"></div>
             <div style="font-size:9px;color:#BDB76B;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${u.name}</div>
-            <div style="font-size:9px;color:${color};margin-bottom:4px;">${inTown} ${outsideText} ${queueText}</div>
-            <div style="font-size:10px;color:${color};margin-bottom:4px;">Total: ${grandTotal} / ${target}</div>
+            <div style="font-size:9px;margin-bottom:2px;">
+                <span style="color:#4CAF50;">${inTown}</span>${outside > 0 ? ` + <span style="color:#FF9800;">${outside}</span>` : ''}${queued > 0 ? ` + <span style="color:#64B5F6;">${queued}</span>` : ''}
+            </div>
+            <div style="font-size:10px;color:${targetColor};margin-bottom:4px;">Total: ${grandTotal} / ${target}</div>
             <input type="number" class="naval-target-input option-input" data-unit="${u.id}" value="${target}" min="0" style="width:100%;text-align:center;padding:4px;font-size:11px;">
         </div>
     `}).join('');
