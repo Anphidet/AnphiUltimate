@@ -5,19 +5,49 @@ const GM_setValue = module.GM_setValue;
 const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 let recruitData = {
-    enabled: false,
-    settings: { 
-        checkInterval: 5, 
-        recruitMode: 'queue',
-        storageThreshold: 80,
-        webhook: '' 
-    },
+    enabledTowns: {},
+    townSettings: {},
     stats: { totalRecruited: 0, recruitCycles: 0 },
     queues: {},
     targets: {},
     plans: [],
-    nextCheckTime: 0
+    nextCheckTimes: {}
 };
+
+const defaultSettings = {
+    checkInterval: 5,
+    recruitMode: 'queue',
+    storageThreshold: 80,
+    webhook: ''
+};
+
+function getTownSettings(townId) {
+    const tid = townId || getCurrentCityId();
+    if (!recruitData.townSettings[tid]) {
+        recruitData.townSettings[tid] = { ...defaultSettings };
+    }
+    return recruitData.townSettings[tid];
+}
+
+function setTownSetting(key, value, townId) {
+    const tid = townId || getCurrentCityId();
+    if (!recruitData.townSettings[tid]) {
+        recruitData.townSettings[tid] = { ...defaultSettings };
+    }
+    recruitData.townSettings[tid][key] = value;
+    saveData();
+}
+
+function isTownEnabled(townId) {
+    const tid = townId || getCurrentCityId();
+    return recruitData.enabledTowns[tid] === true;
+}
+
+function setTownEnabled(enabled, townId) {
+    const tid = townId || getCurrentCityId();
+    recruitData.enabledTowns[tid] = enabled;
+    saveData();
+}
 
 const excludedUnits = ['militia'];
 const researchRequirements = { 'slinger': 'slinger', 'archer': 'archer', 'hoplite': 'hoplite', 'rider': 'rider', 'chariot': 'chariot', 'catapult': 'catapult' };
@@ -33,6 +63,98 @@ function getCurrentGod() { try { const ct = uw.ITowns.getCurrentTown(); return c
 function getResearches() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.researches ? ct.researches()?.attributes || {} : {}; } catch(e) { return {}; } }
 function hasResearch(id) { if (!id) return true; const r = getResearches(); return r[id] === true || r[id] === 1; }
 function getUnitsInTown() { try { const ct = uw.ITowns.getCurrentTown(); return ct?.units ? ct.units() : {}; } catch(e) { return {}; } }
+
+function getTownNameById(townId) {
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (town) return town.getName ? town.getName() : town.name;
+    } catch(e) {}
+    return 'Ville ' + townId;
+}
+
+function getResourcesForTown(townId) {
+    try {
+        const town = uw.MM.getModels().Town[townId];
+        return town?.attributes?.resources || { wood: 0, stone: 0, iron: 0 };
+    } catch(e) { return { wood: 0, stone: 0, iron: 0 }; }
+}
+
+function getStorageForTown(townId) {
+    try {
+        const town = uw.MM.getModels().Town[townId];
+        return town?.attributes?.storage || 8000;
+    } catch(e) { return 8000; }
+}
+
+function getUnitsInQueueForTown(townId) {
+    const queued = {};
+    try {
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.UnitOrder) {
+                for (let id in models.UnitOrder) {
+                    const order = models.UnitOrder[id];
+                    const attrs = order.attributes || order;
+                    if (attrs.town_id == townId && attrs.kind === 'barracks') {
+                        const unitId = attrs.unit_type;
+                        const count = attrs.units_left || attrs.count || 1;
+                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+    return queued;
+}
+
+function getGlobalUnitsForTown(townId) {
+    const globalUnits = {};
+    try {
+        const town = uw.ITowns.getTown(townId);
+        if (!town) return globalUnits;
+        
+        if (typeof town.units === 'function') {
+            const inTown = town.units();
+            for (let unitId in inTown) {
+                if (inTown[unitId] > 0) {
+                    globalUnits[unitId] = (globalUnits[unitId] || 0) + inTown[unitId];
+                }
+            }
+        }
+        
+        if (typeof town.unitsOuter === 'function') {
+            const outer = town.unitsOuter();
+            if (outer) {
+                for (let unitId in outer) {
+                    if (outer[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outer[unitId];
+                    }
+                }
+            }
+        }
+        
+        if (uw.MM && uw.MM.getModels) {
+            const models = uw.MM.getModels();
+            if (models.Movements || models.Commands) {
+                const mvModel = models.Movements || models.Commands;
+                for (let id in mvModel) {
+                    const mv = mvModel[id];
+                    const attrs = mv.attributes || mv;
+                    if ((attrs.origin_town_id == townId || attrs.home_town_id == townId) && attrs.units) {
+                        const units = attrs.units;
+                        for (let unitId in units) {
+                            const unitData = uw.GameData.units[unitId];
+                            if (units[unitId] > 0 && unitData && !unitData.is_naval) {
+                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+    return globalUnits;
+}
 
 function getUnitsInQueue() {
     const queued = {};
@@ -305,10 +427,13 @@ module.render = function(container) {
 module.init = function() {
     loadData();
     
-    document.getElementById('toggle-recruit').checked = recruitData.enabled;
-    document.getElementById('recruit-interval').value = recruitData.settings.checkInterval;
-    document.getElementById('recruit-mode').value = recruitData.settings.recruitMode;
-    document.getElementById('recruit-threshold').value = recruitData.settings.storageThreshold;
+    const cityId = getCurrentCityId();
+    const settings = getTownSettings(cityId);
+    
+    document.getElementById('toggle-recruit').checked = isTownEnabled(cityId);
+    document.getElementById('recruit-interval').value = settings.checkInterval;
+    document.getElementById('recruit-mode').value = settings.recruitMode;
+    document.getElementById('recruit-threshold').value = settings.storageThreshold;
     updateStats();
     updateUnitsGrid();
     updateTargetsGrid();
@@ -317,23 +442,23 @@ module.init = function() {
     
     document.getElementById('toggle-recruit').onchange = (e) => toggleRecruit(e.target.checked);
     document.getElementById('recruit-interval').onchange = (e) => {
-        recruitData.settings.checkInterval = parseFloat(e.target.value);
-        recruitData.nextCheckTime = Date.now() + recruitData.settings.checkInterval * 60000;
-        saveData();
+        const cityId = getCurrentCityId();
+        setTownSetting('checkInterval', parseFloat(e.target.value), cityId);
+        recruitData.nextCheckTimes[cityId] = Date.now() + getTownSettings(cityId).checkInterval * 60000;
         const val = parseFloat(e.target.value);
         const label = val < 1 ? (val * 60) + ' sec' : val + ' min';
-        log('RECRUIT', 'Intervalle: ' + label, 'info');
+        log('RECRUIT', 'Intervalle (' + getCurrentTownName() + '): ' + label, 'info');
     };
     document.getElementById('recruit-mode').onchange = (e) => {
-        recruitData.settings.recruitMode = e.target.value;
-        saveData();
+        const cityId = getCurrentCityId();
+        setTownSetting('recruitMode', e.target.value, cityId);
         const modes = { queue: 'File', loop: 'Boucle', target: 'Objectif' };
-        log('RECRUIT', 'Mode: ' + modes[e.target.value], 'info');
+        log('RECRUIT', 'Mode (' + getCurrentTownName() + '): ' + modes[e.target.value], 'info');
     };
     document.getElementById('recruit-threshold').onchange = (e) => {
-        recruitData.settings.storageThreshold = parseInt(e.target.value);
-        saveData();
-        log('RECRUIT', 'Seuil entrepot: ' + e.target.value + '%', 'info');
+        const cityId = getCurrentCityId();
+        setTownSetting('storageThreshold', parseInt(e.target.value), cityId);
+        log('RECRUIT', 'Seuil (' + getCurrentTownName() + '): ' + e.target.value + '%', 'info');
     };
     document.getElementById('recruit-now').onclick = () => runRecruitCycle();
     document.getElementById('recruit-add-queue').onclick = () => addToQueue();
@@ -352,43 +477,71 @@ module.init = function() {
         };
     });
 
-    if (recruitData.enabled) {
-        toggleRecruit(true);
-    }
+    startAllEnabledTowns();
 
     setupTownChangeObserver();
     startTimer();
     log('RECRUIT', 'Module initialise', 'info');
 };
 
+function startAllEnabledTowns() {
+    for (let townId in recruitData.enabledTowns) {
+        if (recruitData.enabledTowns[townId]) {
+            const settings = getTownSettings(townId);
+            recruitData.nextCheckTimes[townId] = Date.now() + settings.checkInterval * 60000;
+        }
+    }
+}
+
 module.isActive = function() {
-    return recruitData.enabled;
+    for (let townId in recruitData.enabledTowns) {
+        if (recruitData.enabledTowns[townId]) return true;
+    }
+    return false;
 };
 
 module.onActivate = function(container) {
+    refreshUIForCurrentTown();
+};
+
+function refreshUIForCurrentTown() {
+    const cityId = getCurrentCityId();
+    const settings = getTownSettings(cityId);
+    
+    document.getElementById('toggle-recruit').checked = isTownEnabled(cityId);
+    document.getElementById('recruit-interval').value = settings.checkInterval;
+    document.getElementById('recruit-mode').value = settings.recruitMode;
+    document.getElementById('recruit-threshold').value = settings.storageThreshold;
+    
     updateUnitsGrid();
     updateTargetsGrid();
     updateQueueDisplay();
     updatePlansList();
     updateStats();
+    
     const nameEl = document.getElementById('recruit-city-name');
     if (nameEl) nameEl.textContent = getCurrentTownName();
 };
 
 function toggleRecruit(enabled) {
-    recruitData.enabled = enabled;
+    const cityId = getCurrentCityId();
+    const cityName = getCurrentTownName();
+    setTownEnabled(enabled, cityId);
+    
     const ctrl = document.getElementById('recruit-control');
     const status = document.getElementById('recruit-status');
     
     if (enabled) {
         ctrl.classList.remove('inactive');
-        status.textContent = 'Actif';
-        log('RECRUIT', 'Bot demarre', 'success');
-        recruitData.nextCheckTime = Date.now() + recruitData.settings.checkInterval * 60000;
+        status.textContent = 'Actif - ' + cityName;
+        log('RECRUIT', 'Bot demarre pour ' + cityName, 'success');
+        const settings = getTownSettings(cityId);
+        recruitData.nextCheckTimes[cityId] = Date.now() + settings.checkInterval * 60000;
     } else {
         ctrl.classList.add('inactive');
-        status.textContent = 'En attente';
-        log('RECRUIT', 'Bot arrete', 'info');
+        status.textContent = 'Inactif - ' + cityName;
+        log('RECRUIT', 'Bot arrete pour ' + cityName, 'info');
+        delete recruitData.nextCheckTimes[cityId];
     }
     
     saveData();
@@ -545,19 +698,21 @@ function clearQueue() {
     }
 }
 
-function runRecruitCycle() {
-    const mode = recruitData.settings.recruitMode;
+function runRecruitCycle(townId) {
+    const cityId = townId || getCurrentCityId();
+    const settings = getTownSettings(cityId);
+    const mode = settings.recruitMode;
     
     if (mode === 'target') {
-        runTargetMode();
+        runTargetMode(cityId);
     } else {
-        runQueueMode();
+        runQueueMode(cityId);
     }
 }
 
-function runTargetMode() {
-    const cityId = getCurrentCityId();
-    const cityName = getCurrentTownName();
+function runTargetMode(townId) {
+    const cityId = townId || getCurrentCityId();
+    const cityName = getTownNameById(cityId);
     
     if (!cityId) {
         log('RECRUIT', 'Ville non trouvee', 'error');
@@ -566,23 +721,24 @@ function runTargetMode() {
     
     const targets = recruitData.targets[cityId];
     if (!targets || Object.keys(targets).length === 0) {
-        log('RECRUIT', 'Aucun objectif defini', 'warning');
+        log('RECRUIT', '[' + cityName + '] Aucun objectif defini', 'warning');
         return;
     }
     
-    const res = getResources();
-    const storage = getStorageCapacity();
-    const threshold = recruitData.settings.storageThreshold / 100;
+    const res = getResourcesForTown(cityId);
+    const storage = getStorageForTown(cityId);
+    const settings = getTownSettings(cityId);
+    const threshold = settings.storageThreshold / 100;
     const totalRes = res.wood + res.stone + res.iron;
     const fillRate = totalRes / (storage * 3);
     
     if (fillRate < threshold) {
-        log('RECRUIT', `Entrepot: ${Math.round(fillRate * 100)}% < ${recruitData.settings.storageThreshold}%`, 'info');
+        log('RECRUIT', `[${cityName}] Entrepot: ${Math.round(fillRate * 100)}% < ${settings.storageThreshold}%`, 'info');
         return;
     }
     
-    const globalUnits = getGlobalUnits();
-    const unitsInQueue = getUnitsInQueue();
+    const globalUnits = getGlobalUnitsForTown(cityId);
+    const unitsInQueue = getUnitsInQueueForTown(cityId);
     let recruited = false;
     
     for (const unitId in targets) {
@@ -607,20 +763,20 @@ function runTargetMode() {
         const toRecruit = Math.min(needed, maxAffordable);
         if (toRecruit <= 0) continue;
         
-        log('RECRUIT', `Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
+        log('RECRUIT', `[${cityName}] Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
         recruitUnits(cityId, unitId, toRecruit, unitData.name);
         recruited = true;
         break;
     }
     
     if (!recruited) {
-        log('RECRUIT', 'Objectifs atteints ou ressources insuffisantes', 'info');
+        log('RECRUIT', '[' + cityName + '] Objectifs atteints ou ressources insuffisantes', 'info');
     }
 }
 
-function runQueueMode() {
-    const cityId = getCurrentCityId();
-    const cityName = getCurrentTownName();
+function runQueueMode(townId) {
+    const cityId = townId || getCurrentCityId();
+    const cityName = getTownNameById(cityId);
     
     if (!cityId) {
         log('RECRUIT', 'Ville non trouvee', 'error');
@@ -629,7 +785,7 @@ function runQueueMode() {
     
     const queue = recruitData.queues[cityId];
     if (!queue?.length) {
-        log('RECRUIT', 'File vide', 'warning');
+        log('RECRUIT', '[' + cityName + '] File vide', 'warning');
         return;
     }
     
@@ -644,15 +800,16 @@ function runQueueMode() {
     }
     
     const cost = unitData.resources;
-    const res = getResources();
+    const res = getResourcesForTown(cityId);
     
     if (res.wood < cost.wood * order.count || res.stone < cost.stone * order.count || res.iron < cost.iron * order.count) {
-        log('RECRUIT', 'Ressources insuffisantes pour ' + unitData.name, 'warning');
+        log('RECRUIT', '[' + cityName + '] Ressources insuffisantes pour ' + unitData.name, 'warning');
         return;
     }
     
+    const settings = getTownSettings(cityId);
     recruitUnits(cityId, order.id, order.count, unitData.name, () => {
-        if (recruitData.settings.recruitMode === 'loop') {
+        if (settings.recruitMode === 'loop') {
             queue.push(queue.shift());
         } else {
             queue.shift();
@@ -703,6 +860,7 @@ function savePlan() {
     const cityId = getCurrentCityId();
     const queue = recruitData.queues[cityId] || [];
     const targets = recruitData.targets[cityId] || {};
+    const settings = getTownSettings(cityId);
     
     const plan = {
         name: planName,
@@ -710,8 +868,9 @@ function savePlan() {
         queue: [...queue],
         targets: { ...targets },
         settings: {
-            mode: recruitData.settings.recruitMode,
-            threshold: recruitData.settings.storageThreshold
+            mode: settings.recruitMode,
+            threshold: settings.storageThreshold,
+            interval: settings.checkInterval
         }
     };
     
@@ -740,16 +899,22 @@ function loadPlan(index) {
     recruitData.targets[cityId] = { ...plan.targets };
     
     if (plan.settings) {
-        recruitData.settings.recruitMode = plan.settings.mode || 'queue';
-        recruitData.settings.storageThreshold = plan.settings.threshold || 80;
-        document.getElementById('recruit-mode').value = recruitData.settings.recruitMode;
-        document.getElementById('recruit-threshold').value = recruitData.settings.storageThreshold;
+        setTownSetting('recruitMode', plan.settings.mode || 'queue', cityId);
+        setTownSetting('storageThreshold', plan.settings.threshold || 80, cityId);
+        if (plan.settings.interval) {
+            setTownSetting('checkInterval', plan.settings.interval, cityId);
+        }
+        
+        const settings = getTownSettings(cityId);
+        document.getElementById('recruit-mode').value = settings.recruitMode;
+        document.getElementById('recruit-threshold').value = settings.storageThreshold;
+        document.getElementById('recruit-interval').value = settings.checkInterval;
     }
     
     saveData();
     updateQueueDisplay();
     updateTargetsGrid();
-    log('RECRUIT', `Plan "${plan.name}" charge`, 'success');
+    log('RECRUIT', `Plan "${plan.name}" charge pour ${getCurrentTownName()}`, 'success');
 }
 
 function deletePlan(index) {
@@ -851,11 +1016,7 @@ function setupTownChangeObserver() {
     if (uw.$?.Observer && uw.GameEvents) {
         uw.$.Observer(uw.GameEvents.town.town_switch).subscribe(() => {
             setTimeout(() => {
-                const nameEl = document.getElementById('recruit-city-name');
-                if (nameEl) nameEl.textContent = getCurrentTownName();
-                updateUnitsGrid();
-                updateTargetsGrid();
-                updateQueueDisplay();
+                refreshUIForCurrentTown();
             }, 500);
         });
     }
@@ -864,25 +1025,49 @@ function setupTownChangeObserver() {
 function startTimer() {
     setInterval(() => {
         const el = document.getElementById('recruit-timer');
+        const cityId = getCurrentCityId();
+        
         if (!el) return;
         
-        if (!recruitData.enabled) {
+        if (!isTownEnabled(cityId)) {
             el.textContent = '--:--';
             el.classList.remove('ready');
+            
+            runAllEnabledTowns();
             return;
         }
         
-        const diff = recruitData.nextCheckTime - Date.now();
+        const nextCheck = recruitData.nextCheckTimes[cityId] || 0;
+        const diff = nextCheck - Date.now();
+        
         if (diff <= 0) {
-            runRecruitCycle();
-            recruitData.nextCheckTime = Date.now() + recruitData.settings.checkInterval * 60000;
+            runRecruitCycle(cityId);
+            const settings = getTownSettings(cityId);
+            recruitData.nextCheckTimes[cityId] = Date.now() + settings.checkInterval * 60000;
         }
         
         el.classList.remove('ready');
         const m = Math.max(0, Math.floor(diff / 60000)).toString().padStart(2, '0');
         const s = Math.max(0, Math.floor((diff % 60000) / 1000)).toString().padStart(2, '0');
         el.textContent = `${m}:${s}`;
+        
+        runAllEnabledTowns();
     }, 1000);
+}
+
+function runAllEnabledTowns() {
+    const now = Date.now();
+    for (let townId in recruitData.enabledTowns) {
+        if (!recruitData.enabledTowns[townId]) continue;
+        if (townId == getCurrentCityId()) continue;
+        
+        const nextCheck = recruitData.nextCheckTimes[townId] || 0;
+        if (now >= nextCheck) {
+            runRecruitCycle(parseInt(townId));
+            const settings = getTownSettings(townId);
+            recruitData.nextCheckTimes[townId] = now + settings.checkInterval * 60000;
+        }
+    }
 }
 
 function updateStats() {
@@ -893,9 +1078,9 @@ function updateStats() {
 }
 
 function saveData() {
-    GM_setValue('gu_recruit_data', JSON.stringify({
-        enabled: recruitData.enabled,
-        settings: recruitData.settings,
+    GM_setValue('gu_recruit_data_v2', JSON.stringify({
+        enabledTowns: recruitData.enabledTowns,
+        townSettings: recruitData.townSettings,
         stats: recruitData.stats,
         queues: recruitData.queues,
         targets: recruitData.targets,
@@ -904,11 +1089,16 @@ function saveData() {
 }
 
 function loadData() {
-    const saved = GM_getValue('gu_recruit_data');
+    const saved = GM_getValue('gu_recruit_data_v2');
     if (saved) {
         try {
             const d = JSON.parse(saved);
-            recruitData = { ...recruitData, ...d };
+            recruitData.enabledTowns = d.enabledTowns || {};
+            recruitData.townSettings = d.townSettings || {};
+            recruitData.stats = d.stats || recruitData.stats;
+            recruitData.queues = d.queues || {};
+            recruitData.targets = d.targets || {};
+            recruitData.plans = d.plans || [];
         } catch(e) {}
     }
 }
