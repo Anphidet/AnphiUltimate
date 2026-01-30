@@ -7,8 +7,9 @@ const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 const STORAGE_KEY = 'gu_calage_data';
 const INTERVALLE_VERIFICATION = 200;
 const TIMEOUT_VERIFICATION = 30000;
-const AVANCE_LANCEMENT = 15000;
+const AVANCE_LANCEMENT = 20000;
 const LIMITE_HORS_TOLERANCE = 10000;
+const DELAI_APRES_ANNULATION = 800;
 
 let calageData = {
     attaques: [],
@@ -2144,25 +2145,17 @@ function traiterReponseAttaque(response, atk) {
             saveData();
             if (planEnEdition !== null) majAttaquesPlan();
 
-            majStatus('Attente troupes... (#' + atk.tentatives + ')');
+            majStatus('Attente rapide... (#' + atk.tentatives + ')');
 
-            verifierTroupesRevenues(atk.unites).then(function() {
-                log('CALAGE', 'Troupes revenues, renvoi !', 'info');
-                if (doitContinuerAttaque(atk)) {
-                    envoyerAttaque(atk);
-                } else {
-                    log('CALAGE', 'Attaque annulee apres retour troupes', 'warning');
+            setTimeout(function() {
+                if (!doitContinuerAttaque(atk)) {
+                    log('CALAGE', 'Attaque annulee pendant attente', 'warning');
+                    return;
                 }
-            }).catch(function() {
-                log('CALAGE', 'Timeout troupes, renvoi quand meme...', 'warning');
-                setTimeout(function() {
-                    if (doitContinuerAttaque(atk)) {
-                        envoyerAttaque(atk);
-                    } else {
-                        log('CALAGE', 'Attaque annulee apres timeout troupes', 'warning');
-                    }
-                }, 1500);
-            });
+                
+                log('CALAGE', 'Renvoi apres ' + DELAI_APRES_ANNULATION + 'ms', 'info');
+                envoyerAttaque(atk);
+            }, DELAI_APRES_ANNULATION);
 
         }).catch(function(err) {
             const errMsg = err && err.message ? err.message : String(err);
@@ -2237,11 +2230,12 @@ function annulerCommande(commandId) {
     });
 }
 
-function verifierTroupesRevenues(unitesEnvoyees) {
-    console.log('[CALAGE] [TROUPES] Verification retour des troupes');
+function verifierTroupesRevenues(unitesEnvoyees, sourceId) {
+    console.log('[CALAGE] [TROUPES] Verification retour des troupes pour ville', sourceId || uw.Game.townId);
     return new Promise(function(resolve, reject) {
         const startTime = Date.now();
         let checkCount = 0;
+        const townIdToCheck = sourceId || uw.Game.townId;
 
         const interval = setInterval(function() {
             checkCount++;
@@ -2256,32 +2250,65 @@ function verifierTroupesRevenues(unitesEnvoyees) {
             majStatus('Attente troupes... (' + checkCount + ')');
 
             try {
+                let unitsInTown = null;
+                
                 if (uw.ITowns && uw.ITowns.getTown) {
-                    const town = uw.ITowns.getTown(uw.Game.townId);
-                    if (town && town.units) {
-                        const unitsInTown = town.units();
-                        let toutesRevenues = true;
-
-                        for (const unitType in unitesEnvoyees) {
-                            if (unitesEnvoyees.hasOwnProperty(unitType)) {
-                                const countEnvoye = unitesEnvoyees[unitType];
-                                const countDispo = unitsInTown[unitType] || 0;
-                                if (countDispo < countEnvoye) {
-                                    toutesRevenues = false;
-                                    break;
+                    const town = uw.ITowns.getTown(townIdToCheck);
+                    if (town) {
+                        if (typeof town.units === 'function') {
+                            unitsInTown = town.units();
+                        }
+                        
+                        if (typeof town.unitsOuter === 'function') {
+                            const outer = town.unitsOuter();
+                            if (outer && unitsInTown) {
+                                for (let u in outer) {
+                                    unitsInTown[u] = (unitsInTown[u] || 0) + (outer[u] || 0);
                                 }
                             }
                         }
-
-                        if (toutesRevenues) {
-                            console.log('[CALAGE] [TROUPES] Troupes revenues apres', checkCount, 'verifications');
-                            clearInterval(interval);
-                            resolve(true);
-                            return;
+                    }
+                }
+                
+                if (!unitsInTown && uw.MM && uw.MM.getModels) {
+                    const models = uw.MM.getModels();
+                    if (models.Town && models.Town[townIdToCheck]) {
+                        const townModel = models.Town[townIdToCheck];
+                        if (townModel.attributes && townModel.attributes.units) {
+                            unitsInTown = townModel.attributes.units;
                         }
                     }
                 }
-            } catch (e) {}
+                
+                if (unitsInTown) {
+                    let toutesRevenues = true;
+
+                    for (const unitType in unitesEnvoyees) {
+                        if (unitesEnvoyees.hasOwnProperty(unitType)) {
+                            const countEnvoye = unitesEnvoyees[unitType];
+                            const countDispo = unitsInTown[unitType] || 0;
+                            
+                            if (checkCount === 1 || checkCount % 25 === 0) {
+                                console.log('[CALAGE] [TROUPES] ' + unitType + ': ' + countDispo + '/' + countEnvoye);
+                            }
+                            
+                            if (countDispo < countEnvoye) {
+                                toutesRevenues = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (toutesRevenues) {
+                        console.log('[CALAGE] [TROUPES] Troupes revenues apres', checkCount, 'verifications');
+                        clearInterval(interval);
+                        resolve(true);
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.log('[CALAGE] [TROUPES] Erreur verification:', e.message);
+            }
 
         }, INTERVALLE_VERIFICATION);
     });
