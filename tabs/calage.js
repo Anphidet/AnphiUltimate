@@ -5,11 +5,11 @@ const GM_setValue = module.GM_setValue;
 const GM_xmlhttpRequest = module.GM_xmlhttpRequest;
 
 const STORAGE_KEY = 'gu_calage_data';
-const INTERVALLE_VERIFICATION = 200;
+const INTERVALLE_VERIFICATION = 100;
 const TIMEOUT_VERIFICATION = 30000;
-const AVANCE_LANCEMENT = 20000;
+const AVANCE_LANCEMENT = 10000;
 const LIMITE_HORS_TOLERANCE = 10000;
-const DELAI_APRES_ANNULATION = 500;
+const DELAI_APRES_ANNULATION = 300;
 
 let calageData = {
     attaques: [],
@@ -2353,4 +2353,5 @@ function loadData() {
         } catch(e) {}
     }
 }
+
 
