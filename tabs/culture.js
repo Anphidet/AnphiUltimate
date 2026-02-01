@@ -365,12 +365,15 @@ function getCelebrationInProgress(townId) {
 
 // =====================================================================
 //  LANCER UNE CELEBRATION
-//  Endpoint Grepolis confirme :
-//    POST /game/building_place?town_id={ID}&action=celebrate&h={csrfToken}
-//    body: celebration_type=party|games|triumph|theater
-//  Alternative :
-//    POST /game/building_place?town_id={ID}&action=culture&h={csrfToken}
-//    body: celebration_type=party|games|triumph|theater
+//  Methode decouverte dans le code Grepolis :
+//    Le bouton de celebration appelle :
+//      BuildingPlace.startCelebration("triumph", i)
+//    ou la classe est accessible via :
+//      uw.BuildingPlace
+//      uw.WndHandlerPlace (gestionnaire de fenetre Agora)
+//    Le bouton DOM a la classe :
+//      .btn_victory_procession / .btn_party / .btn_games / .btn_theater
+//      avec data-enabled="1"
 // =====================================================================
 function startCelebration(townId, celebrationId, callback) {
     const celebration = CELEBRATIONS[celebrationId];
@@ -387,112 +390,147 @@ function startCelebration(townId, celebrationId, callback) {
         return;
     }
     
-    const csrfToken = uw.Game.csrfToken;
-    
     log('CULTURE', `[${getTownNameById(townId)}] Lancement ${celebration.name}...`, 'info');
 
+    // Mapping celebrationId -> nom Grepolis interne
+    // Les boutons du jeu utilisent ces noms :
+    //   party -> "party" (Festival)
+    //   games -> "games" (Jeux Olympiques)  
+    //   triumph -> "triumph" (Marche Triomphale / Victory Procession)
+    //   theater -> "theater" (Piece de Theatre)
+    const grepoType = celebrationId;
+
+    let launched = false;
+
     // -------------------------------------------------------------------
-    //  Methode 1 : gpAjax.ajaxPost (API native Grepolis)
-    //  Endpoint : building_place / celebrate
-    //  Params   : celebration_type + town_id
+    //  Methode 1 (PRINCIPALE) : BuildingPlace.startCelebration()
+    //  C'est la methode native appelee par les boutons du jeu
+    //  Signature: BuildingPlace.startCelebration(type, town_id_or_event)
     // -------------------------------------------------------------------
-    if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
-        console.log('[CULTURE] Methode gpAjax celebrate...');
+    if (!launched) {
         try {
-            uw.gpAjax.ajaxPost(
-                'building_place',
-                'celebrate',
-                {
-                    celebration_type: celebrationId,
-                    town_id: townId
-                },
-                true,
-                function(response) {
-                    console.log('[CULTURE] gpAjax celebrate Response:', response);
-                    handleCelebrationResponse(response, townId, celebration, callback);
-                },
-                { town_id: townId }
-            );
-            return;
+            if (uw.BuildingPlace && typeof uw.BuildingPlace.startCelebration === 'function') {
+                console.log('[CULTURE] Methode BuildingPlace.startCelebration("' + grepoType + '", ' + townId + ')');
+                uw.BuildingPlace.startCelebration(grepoType, townId);
+                launched = true;
+            }
+        } catch(e) {
+            console.log('[CULTURE] BuildingPlace.startCelebration erreur:', e);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    //  Methode 2 : Chercher la classe BuildingPlace dans les wndhandlers
+    //  Le handler de fenetre place (Agora) contient startCelebration
+    // -------------------------------------------------------------------
+    if (!launched) {
+        try {
+            // Chercher dans les wndhandlers charges
+            if (uw.WndHandlerPlace && typeof uw.WndHandlerPlace.startCelebration === 'function') {
+                console.log('[CULTURE] Methode WndHandlerPlace.startCelebration');
+                uw.WndHandlerPlace.startCelebration(grepoType, townId);
+                launched = true;
+            }
+        } catch(e) {
+            console.log('[CULTURE] WndHandlerPlace erreur:', e);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    //  Methode 3 : gpAjax avec le bon action "celebrate"
+    // -------------------------------------------------------------------
+    if (!launched) {
+        try {
+            if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
+                console.log('[CULTURE] Methode gpAjax building_place/celebrate');
+                uw.gpAjax.ajaxPost(
+                    'building_place',
+                    'celebrate',
+                    { celebration_type: grepoType, town_id: townId },
+                    true,
+                    function(response) {
+                        console.log('[CULTURE] gpAjax celebrate Response:', response);
+                        handleCelebrationResponse(response, townId, celebration, callback);
+                    },
+                    { town_id: townId }
+                );
+                return; // callback sera appele dans handleCelebrationResponse
+            }
         } catch(e) {
             console.log('[CULTURE] gpAjax celebrate erreur:', e);
         }
     }
-    
+
     // -------------------------------------------------------------------
-    //  Methode 2 : jQuery Ajax direct — action=celebrate
+    //  Methode 4 : gpAjax avec action "start_celebration"
     // -------------------------------------------------------------------
-    console.log('[CULTURE] Methode Ajax celebrate...');
-    uw.$.ajax({
-        type: 'POST',
-        url: `/game/building_place?town_id=${townId}&action=celebrate&h=${csrfToken}`,
-        data: { 
-            json: JSON.stringify({ 
-                celebration_type: celebrationId,
-                town_id: townId,
-                nl_init: true 
-            }) 
-        },
-        dataType: 'json',
-        success: function(response) {
-            console.log('[CULTURE] Ajax celebrate Response:', response);
-            handleCelebrationResponse(response, townId, celebration, callback);
-        },
-        error: function(xhr, status, error) {
-            console.log('[CULTURE] Ajax celebrate Error:', xhr.status, xhr.responseText);
-            
-            // -----------------------------------------------------------
-            //  Methode 3 : action=culture (endpoint alternatif)
-            // -----------------------------------------------------------
-            console.log('[CULTURE] Tentative action=culture...');
-            uw.$.ajax({
-                type: 'POST',
-                url: `/game/building_place?town_id=${townId}&action=culture&h=${csrfToken}`,
-                data: { 
-                    json: JSON.stringify({ 
-                        celebration_type: celebrationId,
-                        town_id: townId,
-                        nl_init: true 
-                    }) 
-                },
-                dataType: 'json',
-                success: function(response2) {
-                    console.log('[CULTURE] Alt culture Response:', response2);
-                    handleCelebrationResponse(response2, townId, celebration, callback);
-                },
-                error: function(xhr2, status2, error2) {
-                    console.log('[CULTURE] Alt culture Error:', xhr2.status, xhr2.responseText);
-                    
-                    // ---------------------------------------------------
-                    //  Methode 4 : action=start_celebration
-                    // ---------------------------------------------------
-                    console.log('[CULTURE] Tentative action=start_celebration...');
-                    uw.$.ajax({
-                        type: 'POST',
-                        url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
-                        data: { 
-                            json: JSON.stringify({ 
-                                celebration_type: celebrationId,
-                                town_id: townId,
-                                nl_init: true 
-                            }) 
-                        },
-                        dataType: 'json',
-                        success: function(response3) {
-                            console.log('[CULTURE] start_celebration Response:', response3);
-                            handleCelebrationResponse(response3, townId, celebration, callback);
-                        },
-                        error: function(xhr3) {
-                            console.log('[CULTURE] Toutes les methodes ont echoue');
-                            console.log('[CULTURE] Derniere erreur:', xhr3.status, xhr3.responseText);
-                            log('CULTURE', `[${getTownNameById(townId)}] Erreur: toutes les methodes ont echoue`, 'error');
-                            if (callback) callback(false);
-                        }
-                    });
-                }
-            });
+    if (!launched) {
+        try {
+            if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
+                console.log('[CULTURE] Methode gpAjax building_place/start_celebration');
+                uw.gpAjax.ajaxPost(
+                    'building_place',
+                    'start_celebration',
+                    { celebration_type: grepoType, town_id: townId },
+                    true,
+                    function(response) {
+                        console.log('[CULTURE] gpAjax start_celebration Response:', response);
+                        handleCelebrationResponse(response, townId, celebration, callback);
+                    },
+                    { town_id: townId }
+                );
+                return;
+            }
+        } catch(e) {
+            console.log('[CULTURE] gpAjax start_celebration erreur:', e);
         }
-    });
+    }
+
+    // -------------------------------------------------------------------
+    //  Methode 5 (dernier recours) : Ajax direct
+    // -------------------------------------------------------------------
+    if (!launched) {
+        const csrfToken = uw.Game.csrfToken;
+        console.log('[CULTURE] Methode Ajax direct /building_place?action=celebrate');
+        uw.$.ajax({
+            type: 'POST',
+            url: `/game/building_place?town_id=${townId}&action=celebrate&h=${csrfToken}`,
+            data: { 
+                json: JSON.stringify({ 
+                    celebration_type: grepoType,
+                    town_id: townId,
+                    nl_init: true 
+                }) 
+            },
+            dataType: 'json',
+            success: function(response) {
+                console.log('[CULTURE] Ajax celebrate Response:', response);
+                handleCelebrationResponse(response, townId, celebration, callback);
+            },
+            error: function(xhr) {
+                console.log('[CULTURE] Ajax celebrate Error:', xhr.status, xhr.responseText);
+                log('CULTURE', `[${getTownNameById(townId)}] Erreur Ajax: ${xhr.status}`, 'error');
+                if (callback) callback(false);
+            }
+        });
+        return;
+    }
+
+    // Si BuildingPlace.startCelebration a ete utilise (methodes 1 ou 2),
+    // on considere que c'est lance avec succes apres un delai
+    if (launched) {
+        console.log('[CULTURE] BuildingPlace.startCelebration appele avec succes');
+        cultureData.stats.totalCelebrations++;
+        cultureData.stats.lastCelebration = {
+            town: getTownNameById(townId),
+            type: celebration.name,
+            time: Date.now()
+        };
+        saveData();
+        updateStats();
+        log('CULTURE', `[${getTownNameById(townId)}] ${celebration.icon} ${celebration.name} lance!`, 'success');
+        if (callback) callback(true);
+    }
 }
 
 function handleCelebrationResponse(response, townId, celebration, callback) {
