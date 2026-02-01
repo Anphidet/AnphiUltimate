@@ -103,97 +103,112 @@ function getResourcesForTown(townId) {
 
 function getGoldForPlayer() {
     try {
-        if (uw.MM && uw.MM.getOnlyCollectionByName) {
-            const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
-            if (playerGold && playerGold.models && playerGold.models.length > 0) {
-                const gold = playerGold.models[0].get('gold');
-                if (gold !== undefined) {
-                    console.log('[CULTURE] Gold via PlayerGold collection:', gold);
-                    return gold;
-                }
-            }
-        }
-        
-        if (uw.GameData && uw.GameData.Premium) {
-            const gold = uw.GameData.Premium.gold;
-            if (gold !== undefined) {
-                console.log('[CULTURE] Gold via GameData.Premium:', gold);
-                return gold;
-            }
-        }
-        
-        if (uw.Game && uw.Game.premium_features) {
-            const pf = uw.Game.premium_features;
-            if (pf.gold !== undefined) {
-                console.log('[CULTURE] Gold via Game.premium_features:', pf.gold);
-                return pf.gold;
-            }
-        }
-        
-        const models = uw.MM.getModels();
-        
-        const goldModels = ['PlayerGold', 'PlayerLedger', 'PremiumFeatures', 'PlayerSettings', 'Player'];
-        for (let modelName of goldModels) {
-            if (models[modelName]) {
-                for (let id in models[modelName]) {
-                    const obj = models[modelName][id];
-                    
-                    if (obj && typeof obj.get === 'function') {
-                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
-                            const val = obj.get(attr);
-                            if (val !== undefined && val !== null && typeof val === 'number') {
-                                console.log(`[CULTURE] Gold via ${modelName}.get('${attr}'):`, val);
-                                return val;
-                            }
-                        }
-                    }
-                    
-                    if (obj && obj.attributes) {
-                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
-                            if (obj.attributes[attr] !== undefined) {
-                                console.log(`[CULTURE] Gold via ${modelName}.attributes.${attr}:`, obj.attributes[attr]);
-                                return obj.attributes[attr];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        const domGold = document.querySelector('#trainer_trainer_hint_gold .trainer_icon_gold + span, .gold_amount, .ui_gold_amount');
+        // Methode 1 : DOM #gold_amount (le plus fiable)
+        const domGold = document.getElementById('gold_amount');
         if (domGold) {
             const goldText = domGold.textContent.replace(/[^0-9]/g, '');
             if (goldText) {
-                console.log('[CULTURE] Gold via DOM:', parseInt(goldText));
                 return parseInt(goldText);
             }
         }
         
-        console.log('[CULTURE] Gold non trouve');
+        // Methode 2 : MM collections
+        if (uw.MM && uw.MM.getOnlyCollectionByName) {
+            const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
+            if (playerGold && playerGold.models && playerGold.models.length > 0) {
+                const gold = playerGold.models[0].get('gold');
+                if (gold !== undefined) return gold;
+            }
+        }
+        
+        // Methode 3 : MM modeles
+        const models = uw.MM.getModels();
+        const goldModels = ['PlayerGold', 'PlayerLedger', 'PremiumFeatures', 'Player'];
+        for (let modelName of goldModels) {
+            if (models[modelName]) {
+                for (let id in models[modelName]) {
+                    const obj = models[modelName][id];
+                    if (obj && typeof obj.get === 'function') {
+                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
+                            const val = obj.get(attr);
+                            if (val !== undefined && val !== null && typeof val === 'number') return val;
+                        }
+                    }
+                    if (obj && obj.attributes) {
+                        for (let attr of ['gold', 'premium_gold', 'player_gold']) {
+                            if (obj.attributes[attr] !== undefined) return obj.attributes[attr];
+                        }
+                    }
+                }
+            }
+        }
     } catch(e) {
         console.log('[CULTURE] Erreur getGold:', e);
     }
     return 0;
 }
 
+// =====================================================================
+//  LECTURE BP - DOM .nui_battlepoints_container .points
+//  Structure confirmee dans le DOM :
+//    <div class="nui_battlepoints_container">
+//      <div class="bp_icon"></div>
+//      <div class="points">18620</div>
+//    </div>
+// =====================================================================
 function getBattlePointsForPlayer() {
     try {
-        const models = uw.MM.getModels();
+        // Methode 1 (PRINCIPALE) : DOM — .nui_battlepoints_container .points
+        const bpSelectors = [
+            '.nui_battlepoints_container .points',
+            '.nui_battlepoints_container > .points',
+            '.nui_battlepoints_container div.points',
+        ];
+        for (let sel of bpSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                const txt = el.textContent.trim();
+                const v = parseInt(txt.replace(/[.\s,]/g, ''), 10);
+                if (!isNaN(v) && v >= 0) {
+                    return v;
+                }
+            }
+        }
         
+        // Methode 2 : chercher dans le container BP n'importe quel nombre
+        const container = document.querySelector('.nui_battlepoints_container');
+        if (container) {
+            const allChildren = container.querySelectorAll('*');
+            for (let el of allChildren) {
+                const txt = el.textContent.trim();
+                if (/^\d[\d.\s,]*$/.test(txt)) {
+                    const v = parseInt(txt.replace(/[.\s,]/g, ''), 10);
+                    if (!isNaN(v) && v >= 0) return v;
+                }
+            }
+        }
+        
+        // Methode 3 : bp_icon sibling
+        const bpIcon = document.querySelector('.bp_icon');
+        if (bpIcon) {
+            let sib = bpIcon.nextElementSibling;
+            while (sib) {
+                const v = parseInt(sib.textContent.replace(/[.\s,]/g, ''), 10);
+                if (!isNaN(v) && v >= 0) return v;
+                sib = sib.nextElementSibling;
+            }
+        }
+        
+        // Methode 4 (fallback) : MM modeles
+        const models = uw.MM.getModels();
         if (models.PlayerKillpoints) {
             for (let id in models.PlayerKillpoints) {
                 const obj = models.PlayerKillpoints[id];
                 if (obj && typeof obj.get === 'function') {
                     const att = obj.get('att');
-                    if (att !== undefined && att !== null && typeof att === 'number') {
-                        console.log('[CULTURE] BP via PlayerKillpoints.get(att):', att);
-                        return att;
-                    }
+                    if (att !== undefined && att !== null && typeof att === 'number') return att;
                 }
-                if (obj && obj.attributes && obj.attributes.att !== undefined) {
-                    console.log('[CULTURE] BP via PlayerKillpoints.attributes.att:', obj.attributes.att);
-                    return obj.attributes.att;
-                }
+                if (obj && obj.attributes && obj.attributes.att !== undefined) return obj.attributes.att;
             }
         }
         
@@ -202,10 +217,7 @@ function getBattlePointsForPlayer() {
             if (killpoints && killpoints.models && killpoints.models.length > 0) {
                 const model = killpoints.models[0];
                 const att = model.get('att');
-                if (att !== undefined && att !== null) {
-                    console.log('[CULTURE] BP via PlayerKillpoints collection.get(att):', att);
-                    return att;
-                }
+                if (att !== undefined && att !== null) return att;
             }
         }
         
@@ -214,168 +226,22 @@ function getBattlePointsForPlayer() {
             if (models[modelName]) {
                 for (let id in models[modelName]) {
                     const obj = models[modelName][id];
-                    
                     if (obj && typeof obj.get === 'function') {
                         for (let attr of ['att', 'battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints']) {
                             const val = obj.get(attr);
-                            if (val !== undefined && val !== null && typeof val === 'number') {
-                                console.log(`[CULTURE] BP via ${modelName}.get('${attr}'):`, val);
-                                return val;
-                            }
+                            if (val !== undefined && val !== null && typeof val === 'number') return val;
                         }
                     }
                 }
             }
         }
         
-        if (uw.Game && uw.Game.player_killpoints !== undefined) {
-            console.log('[CULTURE] BP via Game.player_killpoints:', uw.Game.player_killpoints);
-            return uw.Game.player_killpoints;
-        }
+        if (uw.Game && uw.Game.player_killpoints !== undefined) return uw.Game.player_killpoints;
         
-        console.log('[CULTURE] BP non trouve');
     } catch(e) {
         console.log('[CULTURE] Erreur getBattlePoints:', e);
     }
     return 0;
-}
-
-function debugModels() {
-    try {
-        console.log('[CULTURE DEBUG] ======================================');
-        console.log('[CULTURE DEBUG] === EXPLORATION COMPLETE DES MODELES ===');
-        console.log('[CULTURE DEBUG] ======================================');
-        
-        console.log('[CULTURE DEBUG] === MM.getOnlyCollectionByName ===');
-        if (uw.MM && uw.MM.getOnlyCollectionByName) {
-            const collections = ['PlayerLedger', 'PlayerGold', 'Player', 'Killpoints', 'PremiumFeatures'];
-            for (let collName of collections) {
-                try {
-                    const coll = uw.MM.getOnlyCollectionByName(collName);
-                    if (coll) {
-                        console.log(`[CULTURE DEBUG] Collection ${collName}:`, coll);
-                        if (coll.models && coll.models.length > 0) {
-                            const model = coll.models[0];
-                            console.log(`[CULTURE DEBUG] ${collName}.models[0]:`, model);
-                            if (model && model.attributes) {
-                                console.log(`[CULTURE DEBUG] ${collName}.models[0].attributes:`, JSON.stringify(model.attributes));
-                            }
-                        }
-                    } else {
-                        console.log(`[CULTURE DEBUG] Collection ${collName}: null`);
-                    }
-                } catch(e) {
-                    console.log(`[CULTURE DEBUG] Collection ${collName}: erreur`, e.message);
-                }
-            }
-        } else {
-            console.log('[CULTURE DEBUG] MM.getOnlyCollectionByName non disponible');
-        }
-        
-        console.log('[CULTURE DEBUG] === MM.getModels() ===');
-        const models = uw.MM.getModels();
-        console.log('[CULTURE DEBUG] Tous les modeles disponibles:', Object.keys(models));
-        
-        const importantModels = ['PlayerLedger', 'PlayerSettings', 'PremiumFeatures', 'Player', 'PlayerGold', 'PlayerKillpoints', 'Killpoints'];
-        
-        for (let modelName of importantModels) {
-            if (models[modelName]) {
-                console.log(`[CULTURE DEBUG] --- ${modelName} ---`);
-                for (let id in models[modelName]) {
-                    const obj = models[modelName][id];
-                    console.log(`[CULTURE DEBUG] ${modelName}[${id}] type:`, typeof obj);
-                    
-                    if (obj && typeof obj.get === 'function') {
-                        const testAttrs = ['gold', 'battle_points', 'battlepoints', 'bp', 'kill_points', 'killpoints', 'att', 'def', 'premium_gold'];
-                        for (let attr of testAttrs) {
-                            const val = obj.get(attr);
-                            if (val !== undefined) {
-                                console.log(`[CULTURE DEBUG] ${modelName}.get('${attr}'):`, val);
-                            }
-                        }
-                    }
-                    
-                    if (obj && obj.attributes) {
-                        console.log(`[CULTURE DEBUG] ${modelName}.attributes:`, JSON.stringify(obj.attributes));
-                    }
-                    
-                    if (obj && !obj.attributes && typeof obj !== 'function') {
-                        console.log(`[CULTURE DEBUG] ${modelName} raw keys:`, Object.keys(obj));
-                    }
-                    break;
-                }
-            } else {
-                console.log(`[CULTURE DEBUG] ${modelName}: NON PRESENT`);
-            }
-        }
-        
-        console.log('[CULTURE DEBUG] === uw.Game ===');
-        if (uw.Game) {
-            console.log('[CULTURE DEBUG] Game.battle_points:', uw.Game.battle_points);
-            console.log('[CULTURE DEBUG] Game.player_killpoints:', uw.Game.player_killpoints);
-            console.log('[CULTURE DEBUG] Game.premium_features:', uw.Game.premium_features);
-            const gameKeys = Object.keys(uw.Game).filter(k => 
-                k.toLowerCase().includes('gold') || 
-                k.toLowerCase().includes('battle') || 
-                k.toLowerCase().includes('kill') ||
-                k.toLowerCase().includes('point')
-            );
-            console.log('[CULTURE DEBUG] Game keys (gold/battle/kill/point):', gameKeys);
-            for (let k of gameKeys) {
-                console.log(`[CULTURE DEBUG] Game.${k}:`, uw.Game[k]);
-            }
-        }
-        
-        console.log('[CULTURE DEBUG] === uw.GameData ===');
-        if (uw.GameData) {
-            console.log('[CULTURE DEBUG] GameData.Premium:', uw.GameData.Premium);
-            const gdKeys = Object.keys(uw.GameData).filter(k => 
-                k.toLowerCase().includes('gold') || 
-                k.toLowerCase().includes('battle') || 
-                k.toLowerCase().includes('premium')
-            );
-            console.log('[CULTURE DEBUG] GameData keys (gold/battle/premium):', gdKeys);
-        }
-        
-        console.log('[CULTURE DEBUG] === DOM Elements ===');
-        const goldSelectors = [
-            '#trainer_trainer_hint_gold',
-            '.gold_amount',
-            '.ui_gold_amount',
-            '[data-gold]',
-            '.premium_gold'
-        ];
-        for (let sel of goldSelectors) {
-            const el = document.querySelector(sel);
-            if (el) {
-                console.log(`[CULTURE DEBUG] DOM ${sel}:`, el.textContent || el.getAttribute('data-gold'));
-            }
-        }
-        
-        const bpSelectors = [
-            '.battle_points_amount',
-            '.killpoints_amount',
-            '#battle_points_count',
-            '[data-battle-points]',
-            '.points_indicator'
-        ];
-        for (let sel of bpSelectors) {
-            const el = document.querySelector(sel);
-            if (el) {
-                console.log(`[CULTURE DEBUG] DOM ${sel}:`, el.textContent || el.getAttribute('data-battle-points'));
-            }
-        }
-        
-        console.log('[CULTURE DEBUG] === TEST FINAL ===');
-        const bp = getBattlePointsForPlayer();
-        const gold = getGoldForPlayer();
-        console.log('[CULTURE DEBUG] Resultat final BP:', bp);
-        console.log('[CULTURE DEBUG] Resultat final Gold:', gold);
-        console.log('[CULTURE DEBUG] ======================================');
-        
-    } catch(e) {
-        console.log('[CULTURE DEBUG] Erreur globale:', e);
-    }
 }
 
 function getBuildingLevel(townId, buildingId) {
@@ -497,6 +363,15 @@ function getCelebrationInProgress(townId) {
     return null;
 }
 
+// =====================================================================
+//  LANCER UNE CELEBRATION
+//  Endpoint Grepolis confirme :
+//    POST /game/building_place?town_id={ID}&action=celebrate&h={csrfToken}
+//    body: celebration_type=party|games|triumph|theater
+//  Alternative :
+//    POST /game/building_place?town_id={ID}&action=culture&h={csrfToken}
+//    body: celebration_type=party|games|triumph|theater
+// =====================================================================
 function startCelebration(townId, celebrationId, callback) {
     const celebration = CELEBRATIONS[celebrationId];
     if (!celebration) {
@@ -515,50 +390,61 @@ function startCelebration(townId, celebrationId, callback) {
     const csrfToken = uw.Game.csrfToken;
     
     log('CULTURE', `[${getTownNameById(townId)}] Lancement ${celebration.name}...`, 'info');
-    
+
+    // -------------------------------------------------------------------
+    //  Methode 1 : gpAjax.ajaxPost (API native Grepolis)
+    //  Endpoint : building_place / celebrate
+    //  Params   : celebration_type + town_id
+    // -------------------------------------------------------------------
     if (uw.gpAjax && typeof uw.gpAjax.ajaxPost === 'function') {
-        console.log('[CULTURE] Methode gpAjax...');
+        console.log('[CULTURE] Methode gpAjax celebrate...');
         try {
             uw.gpAjax.ajaxPost(
                 'building_place',
-                'start_trainer',
+                'celebrate',
                 {
-                    trainer_id: celebrationId,
+                    celebration_type: celebrationId,
                     town_id: townId
                 },
                 true,
                 function(response) {
-                    console.log('[CULTURE] gpAjax Response:', response);
+                    console.log('[CULTURE] gpAjax celebrate Response:', response);
                     handleCelebrationResponse(response, townId, celebration, callback);
                 },
                 { town_id: townId }
             );
             return;
         } catch(e) {
-            console.log('[CULTURE] gpAjax erreur:', e);
+            console.log('[CULTURE] gpAjax celebrate erreur:', e);
         }
     }
     
-    console.log('[CULTURE] Methode Ajax directe...');
+    // -------------------------------------------------------------------
+    //  Methode 2 : jQuery Ajax direct — action=celebrate
+    // -------------------------------------------------------------------
+    console.log('[CULTURE] Methode Ajax celebrate...');
     uw.$.ajax({
         type: 'POST',
-        url: `/game/building_place?town_id=${townId}&action=start_trainer&h=${csrfToken}`,
+        url: `/game/building_place?town_id=${townId}&action=celebrate&h=${csrfToken}`,
         data: { 
             json: JSON.stringify({ 
-                trainer_id: celebrationId,
+                celebration_type: celebrationId,
                 town_id: townId,
                 nl_init: true 
             }) 
         },
         dataType: 'json',
         success: function(response) {
-            console.log('[CULTURE] Ajax Response:', response);
+            console.log('[CULTURE] Ajax celebrate Response:', response);
             handleCelebrationResponse(response, townId, celebration, callback);
         },
         error: function(xhr, status, error) {
-            console.log('[CULTURE] Ajax Error:', xhr.responseText, status, error);
+            console.log('[CULTURE] Ajax celebrate Error:', xhr.status, xhr.responseText);
             
-            console.log('[CULTURE] Tentative methode alternative...');
+            // -----------------------------------------------------------
+            //  Methode 3 : action=culture (endpoint alternatif)
+            // -----------------------------------------------------------
+            console.log('[CULTURE] Tentative action=culture...');
             uw.$.ajax({
                 type: 'POST',
                 url: `/game/building_place?town_id=${townId}&action=culture&h=${csrfToken}`,
@@ -571,13 +457,38 @@ function startCelebration(townId, celebrationId, callback) {
                 },
                 dataType: 'json',
                 success: function(response2) {
-                    console.log('[CULTURE] Alt Response:', response2);
+                    console.log('[CULTURE] Alt culture Response:', response2);
                     handleCelebrationResponse(response2, townId, celebration, callback);
                 },
                 error: function(xhr2, status2, error2) {
-                    console.log('[CULTURE] Alt Error:', xhr2.responseText, status2, error2);
-                    log('CULTURE', `[${getTownNameById(townId)}] Erreur reseau: ${error2}`, 'error');
-                    if (callback) callback(false);
+                    console.log('[CULTURE] Alt culture Error:', xhr2.status, xhr2.responseText);
+                    
+                    // ---------------------------------------------------
+                    //  Methode 4 : action=start_celebration
+                    // ---------------------------------------------------
+                    console.log('[CULTURE] Tentative action=start_celebration...');
+                    uw.$.ajax({
+                        type: 'POST',
+                        url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
+                        data: { 
+                            json: JSON.stringify({ 
+                                celebration_type: celebrationId,
+                                town_id: townId,
+                                nl_init: true 
+                            }) 
+                        },
+                        dataType: 'json',
+                        success: function(response3) {
+                            console.log('[CULTURE] start_celebration Response:', response3);
+                            handleCelebrationResponse(response3, townId, celebration, callback);
+                        },
+                        error: function(xhr3) {
+                            console.log('[CULTURE] Toutes les methodes ont echoue');
+                            console.log('[CULTURE] Derniere erreur:', xhr3.status, xhr3.responseText);
+                            log('CULTURE', `[${getTownNameById(townId)}] Erreur: toutes les methodes ont echoue`, 'error');
+                            if (callback) callback(false);
+                        }
+                    });
                 }
             });
         }
@@ -585,9 +496,19 @@ function startCelebration(townId, celebrationId, callback) {
 }
 
 function handleCelebrationResponse(response, townId, celebration, callback) {
+    console.log('[CULTURE] Traitement reponse:', JSON.stringify(response).substring(0, 300));
+    
+    // Verifier les erreurs dans la reponse
     if (response?.json?.error || response?.error) {
         const errorMsg = response?.json?.error || response?.error;
         log('CULTURE', `[${getTownNameById(townId)}] Erreur ${celebration.name}: ${errorMsg}`, 'error');
+        if (callback) callback(false);
+        return;
+    }
+    
+    // Verifier si la reponse est vide (peut indiquer un probleme)
+    if (response === null || response === undefined) {
+        log('CULTURE', `[${getTownNameById(townId)}] Reponse vide pour ${celebration.name}`, 'warning');
         if (callback) callback(false);
         return;
     }
@@ -647,6 +568,7 @@ function runCultureCycle() {
     let celebrationStarted = false;
     let townsChecked = 0;
     let townsWithCelebration = 0;
+    let celebQueue = [];
     
     for (let town of towns) {
         const townId = town.id;
@@ -669,13 +591,7 @@ function runCultureCycle() {
             
             const checkResult = canCelebrate(townId, celebId);
             if (checkResult.can) {
-                startCelebration(townId, celebId, function(success) {
-                    if (success) {
-                        celebrationStarted = true;
-                        updateStatusList();
-                        updateTownsGrid();
-                    }
-                });
+                celebQueue.push({ townId, celebId, townName: town.name });
                 break;
             } else {
                 log('CULTURE', `[${town.name}] ${CELEBRATIONS[celebId].name}: ${checkResult.reason}`, 'warning');
@@ -683,7 +599,24 @@ function runCultureCycle() {
         }
     }
     
-    log('CULTURE', `Verification terminee: ${townsChecked} villes verifiees, ${townsWithCelebration} en cours`, 'info');
+    // Lancer les celebrations avec un delai entre chaque pour eviter le spam
+    let delay = 0;
+    for (let item of celebQueue) {
+        setTimeout(() => {
+            startCelebration(item.townId, item.celebId, function(success) {
+                if (success) {
+                    celebrationStarted = true;
+                    setTimeout(() => {
+                        updateStatusList();
+                        updateTownsGrid();
+                    }, 1000);
+                }
+            });
+        }, delay);
+        delay += 2000; // 2s entre chaque lancement
+    }
+    
+    log('CULTURE', `Verification terminee: ${townsChecked} villes verifiees, ${townsWithCelebration} en cours, ${celebQueue.length} a lancer`, 'info');
     
     cultureData.nextCheckTime = Date.now() + cultureData.checkInterval * 1000;
     saveData();
@@ -735,8 +668,12 @@ module.render = function(container) {
                         <div style="font-size:16px;color:#FFD700;font-weight:bold;" id="culture-gold-display">0</div>
                         <div style="font-size:10px;color:#8B8B83;">Or</div>
                     </div>
+                    <div style="text-align:center;">
+                        <div style="font-size:18px;">🎖️</div>
+                        <div style="font-size:16px;color:#81C784;font-weight:bold;" id="culture-marches-display">0</div>
+                        <div style="font-size:10px;color:#8B8B83;">Marches dispo</div>
+                    </div>
                 </div>
-                <button class="btn" style="width:100%;margin-top:12px;" id="culture-debug-btn">🔍 Debug (voir console F12)</button>
             </div>
         </div>
         
@@ -779,7 +716,7 @@ module.render = function(container) {
                 <span class="section-toggle">▼</span>
             </div>
             <div class="section-content">
-                <p style="font-size:11px;color:#BDB76B;margin-bottom:12px;">Selectionnez les celebrations a activer pour chaque ville. Les options grisees ne sont pas disponibles (batiment manquant).</p>
+                <p style="font-size:11px;color:#BDB76B;margin-bottom:12px;">Selectionnez les celebrations a activer pour chaque ville.</p>
                 <div id="culture-towns-grid"></div>
             </div>
         </div>
@@ -813,37 +750,12 @@ module.render = function(container) {
             </div>
         </div>
         
-        <div class="bot-section">
-            <div class="section-header">
-                <div class="section-title"><span>ℹ️</span> Info Celebrations</div>
-                <span class="section-toggle">▼</span>
-            </div>
-            <div class="section-content" id="culture-info-content">
-                <div class="culture-info-grid">
-                    ${Object.values(CELEBRATIONS).map(c => `
-                        <div class="culture-info-item">
-                            <div class="culture-info-header">
-                                <span class="culture-info-icon">${c.icon}</span>
-                                <span class="culture-info-name">${c.name}</span>
-                            </div>
-                            <div class="culture-info-details">
-                                <div class="culture-info-cost">${formatCost(c.cost)}</div>
-                                <div class="culture-info-duration">⏱️ ${formatDuration(c.duration)}</div>
-                                <div class="culture-info-desc">${c.description}</div>
-                                ${Object.keys(c.requires).length > 0 ? `<div class="culture-info-req">Requis: ${Object.entries(c.requires).map(([b,l]) => `${b === 'academy' ? 'Academie' : 'Theatre'} niv.${l}`).join(', ')}</div>` : ''}
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        </div>
-        
         <style>
             #culture-towns-grid {
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
-                max-height: 400px;
+                max-height: 600px;
                 overflow-y: auto;
             }
             .culture-town-card {
@@ -930,7 +842,7 @@ module.render = function(container) {
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
-                max-height: 200px;
+                max-height: 300px;
                 overflow-y: auto;
             }
             .culture-status-item {
@@ -964,54 +876,6 @@ module.render = function(container) {
                 color: #FFB74D;
             }
             
-            .culture-info-grid {
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 10px;
-            }
-            .culture-info-item {
-                background: rgba(0,0,0,0.2);
-                border: 1px solid rgba(212,175,55,0.2);
-                border-radius: 6px;
-                padding: 10px;
-            }
-            .culture-info-header {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                margin-bottom: 8px;
-                padding-bottom: 6px;
-                border-bottom: 1px solid rgba(212,175,55,0.15);
-            }
-            .culture-info-icon {
-                font-size: 18px;
-            }
-            .culture-info-name {
-                font-family: 'Cinzel', serif;
-                font-size: 12px;
-                font-weight: 600;
-                color: #D4AF37;
-            }
-            .culture-info-details {
-                font-size: 10px;
-                color: #BDB76B;
-            }
-            .culture-info-cost {
-                margin-bottom: 4px;
-            }
-            .culture-info-duration {
-                color: #8B8B83;
-                margin-bottom: 4px;
-            }
-            .culture-info-desc {
-                color: #81C784;
-                margin-bottom: 4px;
-            }
-            .culture-info-req {
-                color: #E57373;
-                font-style: italic;
-            }
-            
             .culture-select-all-row {
                 display: flex;
                 gap: 8px;
@@ -1041,10 +905,9 @@ module.render = function(container) {
 module.init = function() {
     loadData();
     
-    debugModels();
-    
     const bp = getBattlePointsForPlayer();
-    log('CULTURE', 'Points de combat actuels: ' + bp, 'info');
+    const gold = getGoldForPlayer();
+    log('CULTURE', `BP: ${bp} | Gold: ${gold} | Marches dispo: ${Math.floor(bp / 300)}`, 'info');
     
     const toggleEl = document.getElementById('toggle-culture');
     const intervalEl = document.getElementById('culture-interval');
@@ -1082,15 +945,7 @@ module.init = function() {
             runCultureCycle();
             updateStatusList();
             updateTownsGrid();
-        };
-    }
-    
-    const debugBtn = document.getElementById('culture-debug-btn');
-    if (debugBtn) {
-        debugBtn.onclick = () => {
-            debugModels();
             updateResourcesDisplay();
-            log('CULTURE', 'Debug lance - voir console F12', 'info');
         };
     }
     
@@ -1106,21 +961,23 @@ module.init = function() {
     
     setupTownChangeObserver();
     
+    // Rafraichir l'affichage des ressources toutes les 10s
+    setInterval(updateResourcesDisplay, 10000);
+    
     log('CULTURE', 'Module initialise', 'info');
 };
 
 function updateResourcesDisplay() {
     const bpEl = document.getElementById('culture-bp-display');
     const goldEl = document.getElementById('culture-gold-display');
+    const marchesEl = document.getElementById('culture-marches-display');
     
-    if (bpEl) {
-        const bp = getBattlePointsForPlayer();
-        bpEl.textContent = bp;
-    }
-    if (goldEl) {
-        const gold = getGoldForPlayer();
-        goldEl.textContent = gold;
-    }
+    const bp = getBattlePointsForPlayer();
+    const gold = getGoldForPlayer();
+    
+    if (bpEl) bpEl.textContent = bp.toLocaleString('fr-FR');
+    if (goldEl) goldEl.textContent = gold.toLocaleString('fr-FR');
+    if (marchesEl) marchesEl.textContent = Math.floor(bp / 300);
 }
 
 module.isActive = function() {
@@ -1131,6 +988,7 @@ module.onActivate = function(container) {
     updateTownsGrid();
     updateStatusList();
     updateStats();
+    updateResourcesDisplay();
 };
 
 function toggleCulture(enabled) {
@@ -1261,7 +1119,6 @@ function selectAllCelebrations(enable) {
     
     for (let town of towns) {
         const townId = town.id;
-        
         for (let celebId of Object.keys(CELEBRATIONS)) {
             if (isCelebrationAvailable(townId, celebId)) {
                 setTownCelebrationEnabled(townId, celebId, enable);
@@ -1358,6 +1215,7 @@ function startTimer() {
             runCultureCycle();
             updateStatusList();
             updateTownsGrid();
+            updateResourcesDisplay();
             
             cultureData.nextCheckTime = now + cultureData.checkInterval * 1000;
             saveData();
@@ -1378,6 +1236,7 @@ function setupTownChangeObserver() {
             uw.$.Observer(uw.GameEvents.town.town_switch).subscribe('gu_culture_town_switch', function() {
                 setTimeout(() => {
                     updateStatusList();
+                    updateResourcesDisplay();
                 }, 500);
             });
         }
