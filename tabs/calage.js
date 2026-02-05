@@ -12,19 +12,11 @@ const LIMITE_HORS_TOLERANCE = 10000;
 const DELAI_APRES_ANNULATION = 800;
 
 // ============================================
-// CONFIGURATION T4 METHOD
+// CONFIGURATION T4
 // ============================================
-const T4_CONFIG = {
-    FILL_DELAY: 500,
-    CLICK_DELAY: 300,
-    USE_T4_METHOD: true
-};
-
+const T4_CONFIG = {FILL_DELAY:500,CLICK_DELAY:300,USE_T4_METHOD:true};
 let t4SavedUnits = {};
-let t4RetrySettings = {
-    retryDelay: 500,
-    maxRetries: 50
-};
+let t4RetrySettings = {retryDelay:500,maxRetries:50};
 
 let calageData = {
     attaques: [],
@@ -242,26 +234,21 @@ function getTimeInMs(timeStr) {
 // ============================================
 // FONCTIONS T4
 // ============================================
-
 function t4SaveUnitsForTown(townId, units) {
-    console.log('[T4] Sauvegarde composition ville', townId);
     t4SavedUnits[townId] = [];
     for (const unitId in units) {
         if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
-            t4SavedUnits[townId].push({ name: unitId, value: units[unitId] });
+            t4SavedUnits[townId].push({name:unitId,value:units[unitId]});
         }
     }
-    try {
-        localStorage.setItem('t4_calage_units_' + townId, JSON.stringify(t4SavedUnits[townId]));
-    } catch(e) {}
-    console.log('[T4] Sauvegardé:', t4SavedUnits[townId].length, 'types');
+    try { localStorage.setItem('t4_calage_units_'+townId,JSON.stringify(t4SavedUnits[townId])); } catch(e) {}
     return t4SavedUnits[townId].length > 0;
 }
 
 function t4LoadUnitsForTown(townId) {
     if (t4SavedUnits[townId]) return t4SavedUnits[townId];
     try {
-        const saved = localStorage.getItem('t4_calage_units_' + townId);
+        const saved = localStorage.getItem('t4_calage_units_'+townId);
         if (saved) {
             t4SavedUnits[townId] = JSON.parse(saved);
             return t4SavedUnits[townId];
@@ -274,57 +261,45 @@ function t4FillUnitsFields(units) {
     return new Promise(function(resolve) {
         try {
             units.forEach(function(unit) {
-                const input = document.querySelector('input[name="' + unit.name + '"]');
+                const input = document.querySelector('input[name="'+unit.name+'"]');
                 if (input) {
                     input.value = unit.value;
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change',{bubbles:true}));
+                    input.dispatchEvent(new Event('input',{bubbles:true}));
                 }
             });
-            setTimeout(function() { resolve(true); }, T4_CONFIG.FILL_DELAY);
-        } catch(e) { resolve(false); }
+            setTimeout(function(){resolve(true);},T4_CONFIG.FILL_DELAY);
+        } catch(e) {resolve(false);}
     });
 }
 
 function t4ClickSendButton() {
     return new Promise(function(resolve) {
         try {
-            const selectors = ['div.button_new[name="Attaquer"]', '#btn_attack_town .button_new', '.btn_attack'];
+            const selectors = ['div.button_new[name="Attaquer"]','#btn_attack_town .button_new','.btn_attack'];
             let sendBtn = null;
-            for (let i = 0; i < selectors.length; i++) {
+            for (let i=0; i<selectors.length; i++) {
                 sendBtn = document.querySelector(selectors[i]);
                 if (sendBtn) break;
             }
             if (sendBtn) {
                 sendBtn.click();
-                setTimeout(function() { resolve(true); }, T4_CONFIG.CLICK_DELAY);
+                setTimeout(function(){resolve(true);},T4_CONFIG.CLICK_DELAY);
             } else {
                 resolve(false);
             }
-        } catch(e) { resolve(false); }
+        } catch(e) {resolve(false);}
     });
 }
 
 function t4CancelCommand(commandId) {
     return new Promise(function(resolve) {
-        const townId = uw.Game.townId;
-        const csrfToken = uw.Game.csrfToken;
-        const jsonPayload = JSON.stringify({
-            model_url: 'Commands',
-            action_name: 'cancelCommand',
-            captcha: null,
-            arguments: {
-                id: commandId,
-                town_id: townId,
-                nl_init: true
-            }
-        });
         uw.$.ajax({
-            url: '/game/frontend_bridge?town_id=' + townId + '&action=execute&h=' + csrfToken,
-            type: 'POST',
-            data: { json: jsonPayload },
-            success: function() { resolve(true); },
-            error: function() { resolve(false); }
+            url:'/game/frontend_bridge?town_id='+uw.Game.townId+'&action=execute&h='+uw.Game.csrfToken,
+            type:'POST',
+            data:{json:JSON.stringify({model_url:'Commands',action_name:'cancelCommand',captcha:null,arguments:{id:commandId,town_id:uw.Game.townId,nl_init:true}})},
+            success:function(){resolve(true);},
+            error:function(){resolve(false);}
         });
     });
 }
@@ -336,7 +311,7 @@ module.render = function(container) {
             <button class="calage-tab active" data-view="plans">📋 Mes Plans</button>
             <button class="calage-tab" data-view="nouveau">+ Nouveau Plan</button>
             <button class="calage-tab" data-view="edition" id="calage-tab-edition" style="display:none;">✏️ Edition</button>
-            <button class="calage-tab" data-view="config-t4">⚙️ Config T4</button>
+            <button class="calage-tab" data-view="config-t4">⚙️ CONFIG T4</button>
         </div>
         
         <div class="calage-content">
@@ -471,6 +446,62 @@ module.render = function(container) {
                     <button class="calage-btn calage-btn-secondary" id="calage-btn-retour">← Retour</button>
                     <button class="calage-btn calage-btn-primary" id="calage-btn-sauver-plan">💾 Sauvegarder</button>
                 </div>
+
+            
+            <!-- Vue Config T4 -->
+            <div class="calage-view" id="calage-view-config-t4">
+                <div class="calage-section">
+                    <h3>⚙️ Configuration Méthode T4</h3>
+                    <div style="background:rgba(52,152,219,0.2);padding:12px;border-radius:6px;margin-bottom:15px;font-size:12px;color:#BDB76B;">
+                        💡 <strong>Méthode T4:</strong> Simulation de clicks (plus naturel)<br>
+                        ✅ Plus sécurisé | 🔄 Auto-annulation | ♾️ Retry auto
+                    </div>
+                    
+                    <div class="calage-row">
+                        <label>Délai entre tentatives (ms):</label>
+                        <input type="number" id="t4-retry-delay" class="calage-input" value="500" min="100" max="5000" step="100">
+                    </div>
+                    
+                    <div class="calage-row">
+                        <label>Nombre max de tentatives:</label>
+                        <input type="number" id="t4-max-retries" class="calage-input" value="50" min="1" max="200">
+                    </div>
+                    
+                    <div class="calage-section" style="background:rgba(155,89,182,0.15);">
+                        <h3>💾 Sauvegarder compositions</h3>
+                        <div style="font-size:12px;color:#BDB76B;margin-bottom:12px;">
+                            Pour chaque ville, sauvegardez la composition d'unités.
+                        </div>
+                        
+                        <div class="calage-row">
+                            <label>Ville:</label>
+                            <select id="t4-select-town" class="calage-select"></select>
+                        </div>
+                        
+                        <div class="calage-row calage-row-right">
+                            <button class="calage-btn calage-btn-warning" id="t4-btn-open-attack">Ouvrir fenêtre d'attaque</button>
+                        </div>
+                        
+                        <div style="background:rgba(0,0,0,0.3);padding:12px;border-radius:6px;margin-top:15px;">
+                            <div style="font-size:11px;color:#8B8B83;margin-bottom:8px;">📝 Instructions:</div>
+                            <ol style="font-size:11px;color:#BDB76B;margin:0;padding-left:20px;">
+                                <li>Sélectionnez la ville source</li>
+                                <li>Cliquez "Ouvrir fenêtre d'attaque"</li>
+                                <li>Remplissez les unités</li>
+                                <li>Cliquez "💾 Sauvegarder cette composition"</li>
+                                <li>Répétez pour chaque ville</li>
+                            </ol>
+                        </div>
+                        
+                        <div id="t4-saved-comps" style="margin-top:15px;"></div>
+                    </div>
+                    
+                    <div class="calage-row">
+                        <label>Activer T4:</label>
+                        <input type="checkbox" id="t4-enabled" checked style="width:20px;height:20px;cursor:pointer;">
+                    </div>
+                </div>
+            </div>
             </div>
         </div>
         
@@ -2051,45 +2082,24 @@ function lancerAttaque(atk) {
 }
 
 function envoyerAttaque(atk) {
-    if (!T4_CONFIG.USE_T4_METHOD) {
-        envoyerAttaqueAJAX(atk);
-        return;
-    }
-    
+    if (!T4_CONFIG.USE_T4_METHOD) { envoyerAttaqueAJAX(atk); return; }
     if (!doitContinuerAttaque(atk)) return;
-    
-    console.log('[T4] Tentative #' + atk.tentatives);
-    majStatus('T4: Tentative #' + atk.tentatives);
-    
     const units = t4LoadUnitsForTown(atk.sourceId);
-    if (!units || units.length === 0) {
-        marquerAttaqueEchec(atk, 'Pas de composition T4 sauvegardée');
-        return;
-    }
-    
+    if (!units || units.length===0) { marquerAttaqueEchec(atk,'Pas de composition T4'); return; }
     t4FillUnitsFields(units).then(function(filled) {
         if (!filled) {
             if (atk.tentatives < t4RetrySettings.maxRetries) {
                 atk.tentatives++;
-                setTimeout(function() {
-                    if (doitContinuerAttaque(atk)) envoyerAttaque(atk);
-                }, t4RetrySettings.retryDelay);
-            } else {
-                marquerAttaqueEchec(atk, 'Max tentatives');
-            }
+                setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
+            } else { marquerAttaqueEchec(atk,'Max tentatives'); }
             return;
         }
-        
         t4ClickSendButton().then(function(clicked) {
             if (!clicked) {
                 if (atk.tentatives < t4RetrySettings.maxRetries) {
                     atk.tentatives++;
-                    setTimeout(function() {
-                        if (doitContinuerAttaque(atk)) envoyerAttaque(atk);
-                    }, t4RetrySettings.retryDelay);
-                } else {
-                    marquerAttaqueEchec(atk, 'Max tentatives');
-                }
+                    setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
+                } else { marquerAttaqueEchec(atk,'Max tentatives'); }
             }
         });
     });
@@ -2507,170 +2517,144 @@ function loadData() {
 }
 
 
-// ============================================
-// INTERCEPTION AJAX T4
-// ============================================
+// T4 AJAX INTERCEPTION
 if (typeof uw.$ !== 'undefined') {
-    uw.$(document).ajaxComplete(function (e, xhr, opt) {
+    uw.$(document).ajaxComplete(function(e,xhr,opt) {
         if (!T4_CONFIG.USE_T4_METHOD) return;
-        const urlParts = opt.url.split("?");
-        const actionParam = (urlParts[1] || "").split("&")[1];
-        const action = actionParam ? urlParts[0].substr(5) + '/' + actionParam.substr(7) : "";
-        if (action === "/town_info/send_units") {
+        const urlParts=opt.url.split("?");
+        const actionParam=(urlParts[1]||"").split("&")[1];
+        const action=actionParam?urlParts[0].substr(5)+'/'+actionParam.substr(7):"";
+        if (action==="/town_info/send_units") {
             try {
-                const response = JSON.parse(xhr.responseText);
-                const notifs = response?.json?.notifications;
+                const response=JSON.parse(xhr.responseText);
+                const notifs=response?.json?.notifications;
                 if (!notifs) return;
-                let mvIndex = -1;
-                for (let i = 0; i < notifs.length; i++) {
-                    if (notifs[i].subject === 'MovementsUnits') {
-                        mvIndex = i;
-                        break;
-                    }
+                let mvIndex=-1;
+                for (let i=0;i<notifs.length;i++) {
+                    if (notifs[i].subject==='MovementsUnits') { mvIndex=i; break; }
                 }
-                if (mvIndex === -1) return;
-                const paramStr = notifs[mvIndex].param_str;
-                const movementData = JSON.parse(paramStr).MovementsUnits;
-                const arrivalAt = movementData.arrival_at;
-                const commandId = movementData.command_id || movementData.id;
-                const atk = calageData.attaqueEnCours;
-                if (!atk || atk.status !== 'encours') return;
-                const targetMs = atk.heureArrivee;
-                const arrivalMs = arrivalAt * 1000;
-                const diffMs = arrivalMs - targetMs;
-                const toleranceMoins = atk.toleranceMoins ? 1000 : 0;
-                const tolerancePlus = atk.tolerancePlus ? 1000 : 0;
-                if (diffMs >= -toleranceMoins && diffMs <= tolerancePlus) {
-                    marquerAttaqueSucces(atk, commandId);
+                if (mvIndex===-1) return;
+                const paramStr=notifs[mvIndex].param_str;
+                const movementData=JSON.parse(paramStr).MovementsUnits;
+                const arrivalAt=movementData.arrival_at;
+                const commandId=movementData.command_id||movementData.id;
+                const atk=calageData.attaqueEnCours;
+                if (!atk||atk.status!=='encours') return;
+                const targetMs=atk.heureArrivee;
+                const arrivalMs=arrivalAt*1000;
+                const diffMs=arrivalMs-targetMs;
+                const toleranceMoins=atk.toleranceMoins?1000:0;
+                const tolerancePlus=atk.tolerancePlus?1000:0;
+                if (diffMs>=-toleranceMoins && diffMs<=tolerancePlus) {
+                    marquerAttaqueSucces(atk,commandId);
                 } else {
                     setTimeout(function() {
                         t4CancelCommand(commandId).then(function() {
-                            if (atk.tentatives < t4RetrySettings.maxRetries) {
+                            if (atk.tentatives<t4RetrySettings.maxRetries) {
                                 atk.tentatives++;
-                                setTimeout(function() {
-                                    if (doitContinuerAttaque(atk)) envoyerAttaque(atk);
-                                }, t4RetrySettings.retryDelay);
-                            } else {
-                                marquerAttaqueEchec(atk, 'Max tentatives');
-                            }
+                                setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
+                            } else { marquerAttaqueEchec(atk,'Max tentatives'); }
                         });
-                    }, 300);
+                    },300);
                 }
-            } catch (e) {}
+            } catch(e) {}
         }
     });
 }
 
-// Config T4 UI handlers
+// T4 UI HANDLERS
 setTimeout(function() {
-    const delayInput = document.getElementById('t4-retry-delay');
-    const maxInput = document.getElementById('t4-max-retries');
-    const enabledCheck = document.getElementById('t4-enabled');
-    const selectTown = document.getElementById('t4-select-town');
-    const btnOpen = document.getElementById('t4-btn-open-attack');
+    const delayInput=document.getElementById('t4-retry-delay');
+    const maxInput=document.getElementById('t4-max-retries');
+    const enabledCheck=document.getElementById('t4-enabled');
+    const selectTown=document.getElementById('t4-select-town');
+    const btnOpen=document.getElementById('t4-btn-open-attack');
     
     if (delayInput) {
-        delayInput.addEventListener('change', function() {
-            t4RetrySettings.retryDelay = parseInt(this.value) || 500;
-            console.log('[T4] Délai:', t4RetrySettings.retryDelay + 'ms');
+        delayInput.addEventListener('change',function(){
+            t4RetrySettings.retryDelay=parseInt(this.value)||500;
         });
     }
-    
     if (maxInput) {
-        maxInput.addEventListener('change', function() {
-            t4RetrySettings.maxRetries = parseInt(this.value) || 50;
-            console.log('[T4] Max tentatives:', t4RetrySettings.maxRetries);
+        maxInput.addEventListener('change',function(){
+            t4RetrySettings.maxRetries=parseInt(this.value)||50;
         });
     }
-    
     if (enabledCheck) {
-        enabledCheck.addEventListener('change', function() {
-            T4_CONFIG.USE_T4_METHOD = this.checked;
-            console.log('[T4] Méthode T4:', this.checked ? 'Activée' : 'Désactivée');
+        enabledCheck.addEventListener('change',function(){
+            T4_CONFIG.USE_T4_METHOD=this.checked;
         });
     }
-    
     if (selectTown) {
-        // Remplir avec les villes
-        const towns = uw.ITowns.getTowns();
-        selectTown.innerHTML = '';
+        const towns=uw.ITowns.getTowns();
+        selectTown.innerHTML='';
         for (const townId in towns) {
-            const town = towns[townId];
-            const option = document.createElement('option');
-            option.value = townId;
-            option.textContent = town.getName() + ' (' + townId + ')';
+            const town=towns[townId];
+            const option=document.createElement('option');
+            option.value=townId;
+            option.textContent=town.getName()+' ('+townId+')';
             selectTown.appendChild(option);
         }
     }
-    
     if (btnOpen) {
-        btnOpen.addEventListener('click', function() {
-            const townId = parseInt(selectTown.value);
+        btnOpen.addEventListener('click',function(){
+            const townId=parseInt(selectTown.value);
             if (townId) {
-                // Ouvrir la fenêtre d'attaque avec bouton de sauvegarde
                 uw.WMap.openTownInfo(townId);
-                
-                // Attendre que la fenêtre soit ouverte
-                setTimeout(function() {
-                    const attackWindow = document.querySelector('.ui-dialog');
+                setTimeout(function(){
+                    const attackWindow=document.querySelector('.ui-dialog');
                     if (attackWindow) {
-                        // Ajouter un bouton de sauvegarde
-                        const saveBtn = document.createElement('button');
-                        saveBtn.textContent = '💾 Sauvegarder cette composition';
-                        saveBtn.style.cssText = 'margin:10px;padding:10px;background:linear-gradient(135deg,#28a745,#20c997);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;';
-                        saveBtn.onclick = function() {
-                            const inputs = document.querySelectorAll('.send_units_form input.unit_input, .attack_form input[type="text"]');
-                            const units = {};
-                            inputs.forEach(function(input) {
-                                const val = parseInt(input.value);
-                                if (val && val > 0) units[input.name] = val;
+                        const saveBtn=document.createElement('button');
+                        saveBtn.textContent='💾 Sauvegarder cette composition';
+                        saveBtn.style.cssText='margin:10px;padding:10px;background:linear-gradient(135deg,#28a745,#20c997);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;';
+                        saveBtn.onclick=function(){
+                            const inputs=document.querySelectorAll('.send_units_form input.unit_input,.attack_form input[type="text"]');
+                            const units={};
+                            inputs.forEach(function(input){
+                                const val=parseInt(input.value);
+                                if (val&&val>0) units[input.name]=val;
                             });
-                            if (Object.keys(units).length > 0) {
-                                t4SaveUnitsForTown(townId, units);
-                                alert('✅ Composition sauvegardée : ' + Object.keys(units).length + ' types d\'unités');
+                            if (Object.keys(units).length>0) {
+                                t4SaveUnitsForTown(townId,units);
+                                alert('✅ Composition sauvegardée : '+Object.keys(units).length+' types');
                                 updateT4SavedComps();
                             } else {
                                 alert('⚠️ Aucune unité trouvée');
                             }
                         };
-                        const dialogContent = attackWindow.querySelector('.ui-dialog-content, .gpwindow_content');
+                        const dialogContent=attackWindow.querySelector('.ui-dialog-content,.gpwindow_content');
                         if (dialogContent) {
-                            dialogContent.insertBefore(saveBtn, dialogContent.firstChild);
+                            dialogContent.insertBefore(saveBtn,dialogContent.firstChild);
                         }
                     }
-                }, 500);
+                },500);
             }
         });
     }
     
     function updateT4SavedComps() {
-        const container = document.getElementById('t4-saved-comps');
+        const container=document.getElementById('t4-saved-comps');
         if (!container) return;
-        
-        let html = '<div style="font-size:12px;color:#D4AF37;margin-bottom:8px;">Compositions sauvegardées:</div>';
-        let hasComps = false;
-        
+        let html='<div style="font-size:12px;color:#D4AF37;margin-bottom:8px;">Compositions sauvegardées:</div>';
+        let hasComps=false;
         for (const townId in t4SavedUnits) {
-            if (t4SavedUnits[townId] && t4SavedUnits[townId].length > 0) {
-                hasComps = true;
-                const town = uw.ITowns.getTown(parseInt(townId));
-                const townName = town ? town.getName() : 'Ville ' + townId;
-                html += '<div style="background:rgba(0,0,0,0.3);padding:8px;border-radius:4px;margin-bottom:5px;font-size:11px;">';
-                html += '<strong style="color:#D4AF37;">' + townName + ':</strong> ';
-                html += '<span style="color:#BDB76B;">' + t4SavedUnits[townId].length + ' types d\'unités</span>';
-                html += '</div>';
+            if (t4SavedUnits[townId]&&t4SavedUnits[townId].length>0) {
+                hasComps=true;
+                const town=uw.ITowns.getTown(parseInt(townId));
+                const townName=town?town.getName():'Ville '+townId;
+                html+='<div style="background:rgba(0,0,0,0.3);padding:8px;border-radius:4px;margin-bottom:5px;font-size:11px;">';
+                html+='<strong style="color:#D4AF37;">'+townName+':</strong> ';
+                html+='<span style="color:#BDB76B;">'+t4SavedUnits[townId].length+' types</span>';
+                html+='</div>';
             }
         }
-        
         if (!hasComps) {
-            html += '<div style="font-size:11px;color:#8B8B83;padding:10px;text-align:center;">Aucune composition sauvegardée</div>';
+            html+='<div style="font-size:11px;color:#8B8B83;padding:10px;text-align:center;">Aucune composition</div>';
         }
-        
-        container.innerHTML = html;
+        container.innerHTML=html;
     }
     
     updateT4SavedComps();
-    
-}, 2000);
+},2000);
 
-console.log('[CALAGE T4] Méthode T4 chargée');
+console.log('[CALAGE T4] Loaded');
