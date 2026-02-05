@@ -10,7 +10,24 @@ const TIMEOUT_VERIFICATION = 30000;
 const AVANCE_LANCEMENT = 20000;
 const LIMITE_HORS_TOLERANCE = 10000;
 const DELAI_APRES_ANNULATION = 800;
-const MAX_TENTATIVES = 50;
+
+
+// ============================================
+// CONFIGURATION T4 METHOD
+// ============================================
+
+const T4_CONFIG = {
+    FILL_DELAY: 500,
+    CLICK_DELAY: 300,
+    USE_T4_METHOD: true
+};
+
+let t4SavedUnits = {};
+let t4LastCommandId = null;
+let t4RetrySettings = {
+    retryDelay: 500,
+    maxRetries: 50
+};
 
 let calageData = {
     attaques: [],
@@ -19,10 +36,7 @@ let calageData = {
     intervalCheck: null,
     plans: [],
     plansActifs: {},
-    settings: { 
-        webhook: '',
-        annulerSiEchec: true
-    }
+    settings: { webhook: '' }
 };
 
 let notifId = 0;
@@ -39,405 +53,6 @@ function genererID() {
 const GROUND_UNITS = ['sword', 'slinger', 'archer', 'hoplite', 'rider', 'chariot', 'catapult', 'minotaur', 'manticore', 'centaur', 'pegasus', 'harpy', 'medusa', 'zyklop', 'cerberus', 'fury', 'griffin', 'calydonian_boar', 'godsent', 'satyr', 'spartoi', 'ladon', 'siren'];
 const NAVAL_UNITS = ['big_transporter', 'bireme', 'attack_ship', 'demolition_ship', 'small_transporter', 'trireme', 'colonize_ship', 'sea_monster'];
 const TRANSPORT_SHIPS = ['big_transporter', 'small_transporter'];
-
-// ========== GESTION DES HÉROS ==========
-
-function getAvailableHeroes(townId) {
-    try {
-        const heroes = [];
-        console.log('[CALAGE] [HEROES] Recherche des héros pour ville:', townId);
-        
-        // Méthode 1: Via ITowns
-        if (uw.ITowns && uw.ITowns.getTown) {
-            const town = uw.ITowns.getTown(townId);
-            if (town) {
-                console.log('[CALAGE] [HEROES] Ville trouvée:', town);
-                
-                // Essayer getHeroes
-                if (typeof town.getHeroes === 'function') {
-                    const heroCollection = town.getHeroes();
-                    console.log('[CALAGE] [HEROES] Collection via getHeroes:', heroCollection);
-                    
-                    if (heroCollection && heroCollection.models) {
-                        heroCollection.models.forEach(function(heroModel) {
-                            if (heroModel && heroModel.attributes) {
-                                const attr = heroModel.attributes;
-                                console.log('[CALAGE] [HEROES] Héros trouvé:', attr);
-                                
-                                // Vérifier que le héros est disponible
-                                if (!attr.wounded && attr.level > 0) {
-                                    heroes.push({
-                                        id: attr.id,
-                                        name: attr.name,
-                                        level: attr.level,
-                                        type: attr.hero_type || attr.type || 'unknown'
-                                    });
-                                }
-                            }
-                        });
-                    }
-                }
-                
-                // Essayer via attributes.heroes
-                if (heroes.length === 0 && town.attributes && town.attributes.heroes) {
-                    console.log('[CALAGE] [HEROES] Essai via town.attributes.heroes');
-                    const heroesAttr = town.attributes.heroes;
-                    for (const heroId in heroesAttr) {
-                        const hero = heroesAttr[heroId];
-                        if (hero && !hero.wounded && hero.level > 0) {
-                            heroes.push({
-                                id: hero.id || heroId,
-                                name: hero.name,
-                                level: hero.level,
-                                type: hero.hero_type || hero.type || 'unknown'
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Méthode 2: Via MM.getCollections
-        if (heroes.length === 0 && uw.MM && uw.MM.getCollections) {
-            console.log('[CALAGE] [HEROES] Essai via MM.getCollections');
-            const collections = uw.MM.getCollections();
-            if (collections && collections.Hero) {
-                for (const collectionId in collections.Hero) {
-                    const heroCollection = collections.Hero[collectionId];
-                    if (heroCollection && heroCollection.models) {
-                        heroCollection.models.forEach(function(heroModel) {
-                            if (heroModel && heroModel.attributes) {
-                                const attr = heroModel.attributes;
-                                if (attr.home_town_id == townId && !attr.wounded && attr.level > 0) {
-                                    heroes.push({
-                                        id: attr.id,
-                                        name: attr.name,
-                                        level: attr.level,
-                                        type: attr.hero_type || attr.type || 'unknown'
-                                    });
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        
-        // Méthode 3: Via MM.getModels
-        if (heroes.length === 0 && uw.MM && uw.MM.getModels) {
-            console.log('[CALAGE] [HEROES] Essai via MM.getModels');
-            const models = uw.MM.getModels();
-            if (models && models.Hero) {
-                for (const heroId in models.Hero) {
-                    const heroModel = models.Hero[heroId];
-                    if (heroModel && heroModel.attributes) {
-                        const attr = heroModel.attributes;
-                        if (attr.home_town_id == townId && !attr.wounded && attr.level > 0) {
-                            heroes.push({
-                                id: attr.id,
-                                name: attr.name,
-                                level: attr.level,
-                                type: attr.hero_type || attr.type || 'unknown'
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Méthode 4: Via GameModels (ultime recours)
-        if (heroes.length === 0 && uw.GameModels && uw.GameModels.heroes) {
-            console.log('[CALAGE] [HEROES] Essai via GameModels.heroes');
-            const heroesData = uw.GameModels.heroes;
-            for (const heroId in heroesData) {
-                const hero = heroesData[heroId];
-                if (hero && hero.home_town_id == townId && !hero.wounded && hero.level > 0) {
-                    heroes.push({
-                        id: hero.id || heroId,
-                        name: hero.name,
-                        level: hero.level,
-                        type: hero.hero_type || hero.type || 'unknown'
-                    });
-                }
-            }
-        }
-        
-        console.log('[CALAGE] [HEROES] Héros trouvés:', heroes.length, heroes);
-        return heroes;
-    } catch (e) {
-        console.error('[CALAGE] [HEROES] Erreur:', e);
-        return [];
-    }
-}
-
-function getHeroName(heroId) {
-    try {
-        if (!heroId) return null;
-        
-        // Chercher dans tous les modèles
-        if (uw.MM && uw.MM.getModels) {
-            const models = uw.MM.getModels();
-            if (models && models.Hero && models.Hero[heroId]) {
-                return models.Hero[heroId].attributes.name;
-            }
-        }
-        
-        return 'Héros #' + heroId;
-    } catch (e) {
-        return 'Héros #' + heroId;
-    }
-}
-
-// ========== INTÉGRATION PLANIFICATEUR NATIF ==========
-
-function ouvrirPlanificateurNatif(targetTownId, callback) {
-    try {
-        console.log('[CALAGE] [PLANNER] Ouverture planificateur pour cible:', targetTownId);
-        
-        // Méthode 1: Via WMap
-        if (uw.WMap && uw.WMap.openAttackPlannerWindow) {
-            uw.WMap.openAttackPlannerWindow(targetTownId);
-            if (callback) setTimeout(callback, 800);
-            return true;
-        }
-        
-        // Méthode 2: Via Layout
-        if (uw.Layout && uw.Layout.showAttackPlannerWindow) {
-            uw.Layout.showAttackPlannerWindow(targetTownId);
-            if (callback) setTimeout(callback, 800);
-            return true;
-        }
-        
-        // Méthode 3: Via GPWindowMgr
-        if (uw.GPWindowMgr) {
-            const windowType = uw.GPWindowMgr.TYPE_ATTACK_PLANNER || 'attack_planner';
-            
-            // Chercher une fenêtre existante
-            const existingWindow = uw.GPWindowMgr.getOpenFirst(windowType);
-            if (existingWindow) {
-                console.log('[CALAGE] [PLANNER] Fenêtre existante trouvée');
-                if (existingWindow.setTarget) {
-                    existingWindow.setTarget(targetTownId);
-                }
-                if (callback) setTimeout(callback, 800);
-                return true;
-            }
-            
-            // Créer une nouvelle fenêtre
-            console.log('[CALAGE] [PLANNER] Création nouvelle fenêtre');
-            uw.GPWindowMgr.Create(windowType, '', {target: targetTownId});
-            if (callback) setTimeout(callback, 1000);
-            return true;
-        }
-        
-        console.error('[CALAGE] [PLANNER] Aucune méthode disponible');
-        return false;
-    } catch (e) {
-        console.error('[CALAGE] [PLANNER] Erreur:', e);
-        return false;
-    }
-}
-
-function recupererInfosPlanificateur(callback) {
-    try {
-        console.log('[CALAGE] [PLANNER] Récupération infos planificateur');
-        
-        // Chercher la fenêtre du planificateur
-        let plannerWindow = null;
-        
-        if (uw.GPWindowMgr) {
-            const windowType = uw.GPWindowMgr.TYPE_ATTACK_PLANNER || 'attack_planner';
-            plannerWindow = uw.GPWindowMgr.getOpenFirst(windowType);
-        }
-        
-        if (!plannerWindow) {
-            console.error('[CALAGE] [PLANNER] Fenêtre non trouvée');
-            if (callback) callback(new Error('Planificateur non ouvert'));
-            return;
-        }
-        
-        console.log('[CALAGE] [PLANNER] Fenêtre trouvée:', plannerWindow);
-        
-        // Récupérer le contrôleur
-        const controller = plannerWindow.getController ? plannerWindow.getController() : null;
-        
-        if (!controller) {
-            console.error('[CALAGE] [PLANNER] Contrôleur non trouvé');
-            if (callback) callback(new Error('Contrôleur non disponible'));
-            return;
-        }
-        
-        console.log('[CALAGE] [PLANNER] Contrôleur trouvé:', controller);
-        
-        // Récupérer les informations
-        const infos = {
-            travelTime: null,
-            arrivalTime: null,
-            units: {},
-            heroId: null
-        };
-        
-        // Temps de trajet
-        if (controller.getTravelTime) {
-            infos.travelTime = controller.getTravelTime();
-        } else if (controller.travel_time) {
-            infos.travelTime = controller.travel_time;
-        }
-        
-        // Heure d'arrivée
-        if (controller.getArrivalTime) {
-            infos.arrivalTime = controller.getArrivalTime();
-        } else if (controller.arrival_time) {
-            infos.arrivalTime = controller.arrival_time;
-        }
-        
-        // Unités
-        if (controller.getUnits) {
-            infos.units = controller.getUnits();
-        } else if (controller.units) {
-            infos.units = controller.units;
-        }
-        
-        // Héros
-        if (controller.getHero) {
-            infos.heroId = controller.getHero();
-        } else if (controller.hero_id) {
-            infos.heroId = controller.hero_id;
-        }
-        
-        console.log('[CALAGE] [PLANNER] Infos récupérées:', infos);
-        
-        if (callback) callback(null, infos);
-        
-    } catch (e) {
-        console.error('[CALAGE] [PLANNER] Erreur récupération:', e);
-        if (callback) callback(e);
-    }
-}
-
-function configurerPlanificateur(units, heroId, arrivalTime, callback) {
-    try {
-        console.log('[CALAGE] [PLANNER] Configuration:', {units, heroId, arrivalTime});
-        
-        // Chercher la fenêtre
-        let plannerWindow = null;
-        if (uw.GPWindowMgr) {
-            const windowType = uw.GPWindowMgr.TYPE_ATTACK_PLANNER || 'attack_planner';
-            plannerWindow = uw.GPWindowMgr.getOpenFirst(windowType);
-        }
-        
-        if (!plannerWindow) {
-            if (callback) callback(new Error('Planificateur non ouvert'));
-            return;
-        }
-        
-        const controller = plannerWindow.getController ? plannerWindow.getController() : null;
-        if (!controller) {
-            if (callback) callback(new Error('Contrôleur non disponible'));
-            return;
-        }
-        
-        // Configurer les unités
-        for (const unitId in units) {
-            if (units[unitId] > 0) {
-                if (controller.setUnitCount) {
-                    controller.setUnitCount(unitId, units[unitId]);
-                }
-            }
-        }
-        
-        // Configurer le héros
-        if (heroId && controller.setHero) {
-            controller.setHero(heroId);
-        }
-        
-        // Configurer l'heure d'arrivée
-        if (arrivalTime) {
-            const arrivalDate = new Date(arrivalTime);
-            if (controller.setArrivalTime) {
-                controller.setArrivalTime(arrivalDate);
-            }
-        }
-        
-        // Attendre que le planificateur calcule
-        setTimeout(function() {
-            recupererInfosPlanificateur(callback);
-        }, 500);
-        
-    } catch (e) {
-        console.error('[CALAGE] [PLANNER] Erreur configuration:', e);
-        if (callback) callback(e);
-    }
-}
-
-function fermerPlanificateur() {
-    try {
-        if (uw.GPWindowMgr) {
-            const windowType = uw.GPWindowMgr.TYPE_ATTACK_PLANNER || 'attack_planner';
-            const plannerWindow = uw.GPWindowMgr.getOpenFirst(windowType);
-            if (plannerWindow && plannerWindow.close) {
-                plannerWindow.close();
-            }
-        }
-    } catch (e) {
-        console.error('[CALAGE] [PLANNER] Erreur fermeture:', e);
-    }
-}
-
-// ========== CALCUL AUTOMATIQUE VIA PLANIFICATEUR ==========
-
-function calculerTempsViaPlannificateur(sourceTownId, targetTownId, units, heroId, arrivalTime, callback) {
-    console.log('[CALAGE] [CALCUL] Démarrage calcul via planificateur');
-    console.log('[CALAGE] [CALCUL] Source:', sourceTownId, 'Cible:', targetTownId);
-    console.log('[CALAGE] [CALCUL] Unités:', units);
-    console.log('[CALAGE] [CALCUL] Héros:', heroId);
-    console.log('[CALAGE] [CALCUL] Arrivée:', arrivalTime);
-    
-    // Vérifier que nous sommes sur la bonne ville
-    if (uw.Game.townId !== sourceTownId) {
-        console.log('[CALAGE] [CALCUL] Changement de ville nécessaire');
-        
-        try {
-            if (uw.TownSwitch && uw.TownSwitch.switchTown) {
-                uw.TownSwitch.switchTown(sourceTownId);
-            } else if (uw.ITowns && uw.ITowns.setCurrentTown) {
-                uw.ITowns.setCurrentTown(sourceTownId);
-            }
-            
-            // Attendre le changement de ville
-            setTimeout(function() {
-                calculerTempsViaPlannificateur(sourceTownId, targetTownId, units, heroId, arrivalTime, callback);
-            }, 1500);
-            return;
-            
-        } catch (e) {
-            console.error('[CALAGE] [CALCUL] Erreur changement ville:', e);
-            if (callback) callback(e);
-            return;
-        }
-    }
-    
-    // Ouvrir le planificateur
-    ouvrirPlanificateurNatif(targetTownId, function() {
-        // Configurer le planificateur
-        configurerPlanificateur(units, heroId, arrivalTime, function(err, infos) {
-            if (err) {
-                console.error('[CALAGE] [CALCUL] Erreur:', err);
-                fermerPlanificateur();
-                if (callback) callback(err);
-                return;
-            }
-            
-            console.log('[CALAGE] [CALCUL] Résultat:', infos);
-            
-            // Fermer le planificateur
-            fermerPlanificateur();
-            
-            // Retourner les infos
-            if (callback) callback(null, infos);
-        });
-    });
-}
 
 function getCurrentCityId() { try { return uw.ITowns.getCurrentTown().id; } catch(e) { return null; } }
 function getResearches(townId) { 
@@ -500,6 +115,84 @@ function calculateRequiredBoats(units, townId) {
         bigBoatCap: bigCap,
         smallBoatCap: smallCap,
         hasEnoughBoats: totalCapacity >= totalPop,
+
+// ============================================
+// FONCTIONS T4
+// ============================================
+
+function t4SaveUnitsForTown(townId, units) {
+    console.log('[T4] Sauvegarde pour ville', townId);
+    t4SavedUnits[townId] = [];
+    for (const unitId in units) {
+        if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
+            t4SavedUnits[townId].push({ name: unitId, value: units[unitId] });
+        }
+    }
+    try {
+        localStorage.setItem('t4_calage_units_' + townId, JSON.stringify(t4SavedUnits[townId]));
+    } catch(e) {}
+    return t4SavedUnits[townId].length > 0;
+}
+
+function t4LoadUnitsForTown(townId) {
+    if (t4SavedUnits[townId]) return t4SavedUnits[townId];
+    try {
+        const saved = localStorage.getItem('t4_calage_units_' + townId);
+        if (saved) {
+            t4SavedUnits[townId] = JSON.parse(saved);
+            return t4SavedUnits[townId];
+        }
+    } catch(e) {}
+    return null;
+}
+
+function t4FillUnitsFields(units) {
+    return new Promise(function(resolve) {
+        try {
+            units.forEach(function(unit) {
+                const input = document.querySelector('input[name="' + unit.name + '"]');
+                if (input) {
+                    input.value = unit.value;
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            });
+            setTimeout(function() { resolve(true); }, T4_CONFIG.FILL_DELAY);
+        } catch(e) { resolve(false); }
+    });
+}
+
+function t4ClickSendButton() {
+    return new Promise(function(resolve) {
+        try {
+            const selectors = ['div.button_new[name="Attaquer"]', '#btn_attack_town .button_new'];
+            let sendBtn = null;
+            for (let i = 0; i < selectors.length; i++) {
+                sendBtn = document.querySelector(selectors[i]);
+                if (sendBtn) break;
+            }
+            if (sendBtn) {
+                sendBtn.click();
+                setTimeout(function() { resolve(true); }, T4_CONFIG.CLICK_DELAY);
+            } else {
+                resolve(false);
+            }
+        } catch(e) { resolve(false); }
+    });
+}
+
+function t4CancelCommand(commandId) {
+    return new Promise(function(resolve) {
+        uw.$.ajax({
+            url: '/game/frontend_bridge?town_id=' + uw.Game.townId + '&action=execute&h=' + uw.Game.csrfToken,
+            type: 'POST',
+            data: { json: JSON.stringify({model_url:'Commands',action_name:'cancelCommand',captcha:null,arguments:{id:commandId,town_id:uw.Game.townId,nl_init:true}}) },
+            success: function() { resolve(true); },
+            error: function() { resolve(false); }
+        });
+    });
+}
+
         neededCapacity: Math.max(0, totalPop - totalCapacity),
         percentage: totalPop > 0 ? Math.min(100, Math.round((totalCapacity / totalPop) * 100)) : 100
     };
@@ -626,78 +319,6 @@ function getTimeInMs(timeStr) {
     date.setHours(hour, minute, second, 0);
     return date.getTime();
 }
-
-// Ajouter les styles CSS
-const GM_addStyle = module.GM_addStyle;
-GM_addStyle(`
-.calage-tabs { display: flex; gap: 5px; margin-bottom: 15px; border-bottom: 2px solid rgba(212, 175, 55, 0.3); }
-.calage-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; background: rgba(0, 0, 0, 0.2); border: none; color: #8B8B83; font-weight: 600; transition: all 0.2s; border-radius: 6px 6px 0 0; }
-.calage-tab:hover { background: rgba(212, 175, 55, 0.2); color: #F5DEB3; }
-.calage-tab.active { background: linear-gradient(180deg, rgba(212, 175, 55, 0.3), rgba(212, 175, 55, 0.15)); color: #FFD700; border-bottom: 3px solid #D4AF37; }
-.calage-content { min-height: 400px; }
-.calage-view { display: none; }
-.calage-view.active { display: block; }
-.calage-section { background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(212, 175, 55, 0.3); border-radius: 8px; padding: 15px; margin-bottom: 15px; }
-.calage-section h3 { margin: 0 0 15px 0; color: #F5DEB3; font-size: 16px; }
-.calage-section h4 { margin: 10px 0; color: #D4AF37; font-size: 14px; }
-.calage-row { display: flex; flex-direction: column; margin-bottom: 12px; }
-.calage-row label { color: #BDB76B; font-size: 12px; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }
-.calage-input, .calage-select { background: linear-gradient(180deg, #3D3225, #2D2419); border: 1px solid #8B6914; border-radius: 5px; color: #F5DEB3; padding: 10px; font-size: 14px; width: 100%; box-sizing: border-box; }
-.calage-input:focus, .calage-select:focus { outline: none; border-color: #D4AF37; }
-.calage-tolerance { display: flex; gap: 10px; align-items: center; }
-.calage-select-small { width: 80px; }
-.calage-row-right { justify-content: flex-end; flex-direction: row; }
-.calage-btn { background: linear-gradient(145deg, #8B6914, #5D4E37); border: 2px solid #D4AF37; color: #F5DEB3; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
-.calage-btn:hover { background: linear-gradient(145deg, #D4AF37, #8B6914); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); }
-.calage-btn-primary { background: linear-gradient(145deg, #3498db, #2980b9); border-color: #5DADE2; }
-.calage-btn-primary:hover { background: linear-gradient(145deg, #5DADE2, #3498db); }
-.calage-btn-success { background: linear-gradient(145deg, #27ae60, #229954); border-color: #52BE80; }
-.calage-btn-success:hover { background: linear-gradient(145deg, #52BE80, #27ae60); }
-.calage-btn-danger { background: linear-gradient(145deg, #e74c3c, #c0392b); border-color: #EC7063; }
-.calage-btn-danger:hover { background: linear-gradient(145deg, #EC7063, #e74c3c); }
-.calage-btn-small { padding: 6px 12px; font-size: 12px; }
-.calage-empty { text-align: center; padding: 60px 20px; color: #8B8B83; }
-.calage-empty-icon { font-size: 64px; margin-bottom: 15px; opacity: 0.5; }
-.calage-empty-text { font-size: 18px; margin-bottom: 8px; color: #BDB76B; }
-.calage-empty-hint { font-size: 14px; }
-.calage-plan-card { background: rgba(0, 0, 0, 0.3); border: 2px solid rgba(212, 175, 55, 0.3); border-radius: 8px; padding: 15px; margin-bottom: 12px; transition: all 0.2s; }
-.calage-plan-card:hover { border-color: rgba(212, 175, 55, 0.6); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); }
-.calage-plan-card.calage-plan-actif { border-color: #52BE80; background: rgba(39, 174, 96, 0.1); }
-.calage-plan-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.calage-plan-nom { font-size: 16px; font-weight: 700; color: #FFD700; }
-.calage-plan-status { font-size: 11px; padding: 4px 10px; border-radius: 12px; background: #52BE80; color: white; font-weight: 600; }
-.calage-plan-info { font-size: 13px; color: #BDB76B; margin-bottom: 8px; }
-.calage-plan-stats { display: flex; gap: 15px; margin: 10px 0; }
-.calage-stat { font-size: 12px; color: #8B8B83; }
-.calage-stat strong { color: #F5DEB3; }
-.calage-plan-actions { display: flex; gap: 8px; margin-top: 12px; }
-.calage-attaque-item { background: rgba(0, 0, 0, 0.3); border-left: 4px solid #9b59b6; padding: 12px; margin-bottom: 10px; border-radius: 4px; }
-.calage-attaque-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.calage-attaque-source { color: #3498db; font-weight: 600; }
-.calage-attaque-arrow { color: #8B8B83; margin: 0 5px; }
-.calage-attaque-cible { color: #e74c3c; font-weight: 600; }
-.calage-attaque-time { color: #FFD700; font-weight: 700; font-size: 14px; }
-.calage-attaque-details { font-size: 12px; color: #BDB76B; margin-bottom: 8px; }
-.calage-attaque-type { margin-right: 10px; }
-.calage-attaque-units { color: #F5DEB3; }
-.calage-attaque-hero { margin-top: 8px; padding: 6px 10px; background: rgba(155, 89, 182, 0.1); border-left: 3px solid #9b59b6; border-radius: 4px; font-size: 12px; color: #9b59b6; font-weight: 600; }
-.calage-attaque-status { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-.calage-attaque-status.attente { background: #95a5a6; color: white; }
-.calage-attaque-status.encours { background: #f39c12; color: white; }
-.calage-attaque-status.succes { background: #27ae60; color: white; }
-.calage-attaque-status.echec { background: #e74c3c; color: white; }
-.calage-attaque-actions { display: flex; gap: 8px; margin-top: 10px; }
-.calage-units-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 15px 0; }
-.calage-unit-box { background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(212, 175, 55, 0.2); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; align-items: center; }
-.calage-unit-name { font-size: 11px; color: #BDB76B; margin-bottom: 5px; text-align: center; }
-.calage-unit-input { background: rgba(0, 0, 0, 0.5); border: 1px solid #8B6914; color: #FFD700; padding: 6px; border-radius: 4px; width: 70px; text-align: center; font-weight: 600; }
-.calage-unit-available { font-size: 10px; color: #52BE80; margin-top: 3px; }
-#calage-hero-container { background: rgba(155, 89, 182, 0.05); border-left: 3px solid #9b59b6; padding: 15px; border-radius: 6px; }
-#calage-hero-info { margin-top: 8px; padding: 8px; background: rgba(155, 89, 182, 0.1); border-radius: 4px; font-size: 12px; color: #9b59b6; }
-#calage-calcul-info { margin-top: 10px; padding: 12px; background: rgba(52, 152, 219, 0.1); border-left: 3px solid #3498db; border-radius: 4px; }
-#calage-calcul-details { font-size: 13px; color: #F5DEB3; line-height: 1.6; }
-#calage-calcul-details strong { color: #FFD700; }
-`);
 
 module.render = function(container) {
     container.innerHTML = `
@@ -2419,6 +2040,44 @@ function lancerAttaque(atk) {
 }
 
 function envoyerAttaque(atk) {
+    if (!T4_CONFIG.USE_T4_METHOD) {
+        envoyerAttaqueAJAX(atk);
+        return;
+    }
+    
+    if (!doitContinuerAttaque(atk)) return;
+    
+    const units = t4LoadUnitsForTown(atk.sourceId);
+    if (!units || units.length === 0) {
+        marquerAttaqueEchec(atk, 'Pas de composition');
+        return;
+    }
+    
+    t4FillUnitsFields(units).then(function(filled) {
+        if (!filled) {
+            if (atk.tentatives < t4RetrySettings.maxRetries) {
+                atk.tentatives++;
+                setTimeout(function() { if (doitContinuerAttaque(atk)) envoyerAttaque(atk); }, t4RetrySettings.retryDelay);
+            } else {
+                marquerAttaqueEchec(atk, 'Max tentatives');
+            }
+            return;
+        }
+        
+        t4ClickSendButton().then(function(clicked) {
+            if (!clicked) {
+                if (atk.tentatives < t4RetrySettings.maxRetries) {
+                    atk.tentatives++;
+                    setTimeout(function() { if (doitContinuerAttaque(atk)) envoyerAttaque(atk); }, t4RetrySettings.retryDelay);
+                } else {
+                    marquerAttaqueEchec(atk, 'Max tentatives');
+                }
+            }
+        });
+    });
+}
+
+function envoyerAttaqueAJAX(atk) {
     if (!doitContinuerAttaque(atk)) {
         log('CALAGE', 'Attaque annulee (plan arrete ou attaque terminee)', 'warning');
         return;
@@ -2467,6 +2126,8 @@ function envoyerAttaque(atk) {
             }, 1000);
         }
     });
+}
+
 }
 
 function doitContinuerAttaque(atk) {
@@ -2828,3 +2489,99 @@ function loadData() {
         } catch(e) {}
     }
 }
+
+// ============================================
+// INTERCEPTION AJAX T4
+// ============================================
+
+if (typeof uw.$ !== 'undefined') {
+    uw.$(document).ajaxComplete(function (e, xhr, opt) {
+        if (!T4_CONFIG.USE_T4_METHOD) return;
+        
+        const urlParts = opt.url.split("?");
+        const actionParam = (urlParts[1] || "").split("&")[1];
+        const action = actionParam ? urlParts[0].substr(5) + '/' + actionParam.substr(7) : "";
+        
+        if (action === "/town_info/send_units") {
+            try {
+                const response = JSON.parse(xhr.responseText);
+                const notifs = response?.json?.notifications;
+                if (!notifs) return;
+                
+                let mvIndex = -1;
+                for (let i = 0; i < notifs.length; i++) {
+                    if (notifs[i].subject === 'MovementsUnits') {
+                        mvIndex = i;
+                        break;
+                    }
+                }
+                if (mvIndex === -1) return;
+                
+                const paramStr = notifs[mvIndex].param_str;
+                const movementData = JSON.parse(paramStr).MovementsUnits;
+                const arrivalAt = movementData.arrival_at;
+                const commandId = movementData.command_id || movementData.id;
+                
+                t4LastCommandId = commandId;
+                
+                const atk = calageData.attaqueEnCours;
+                if (!atk || atk.status !== 'encours') return;
+                
+                const targetMs = atk.heureArrivee;
+                const arrivalMs = arrivalAt * 1000;
+                const diffMs = arrivalMs - targetMs;
+                const toleranceMoins = atk.toleranceMoins ? 1000 : 0;
+                const tolerancePlus = atk.tolerancePlus ? 1000 : 0;
+                
+                if (diffMs >= -toleranceMoins && diffMs <= tolerancePlus) {
+                    marquerAttaqueSucces(atk, commandId);
+                } else {
+                    setTimeout(function() {
+                        t4CancelCommand(commandId).then(function() {
+                            if (atk.tentatives < t4RetrySettings.maxRetries) {
+                                atk.tentatives++;
+                                setTimeout(function() {
+                                    if (doitContinuerAttaque(atk)) envoyerAttaque(atk);
+                                }, t4RetrySettings.retryDelay);
+                            } else {
+                                marquerAttaqueEchec(atk, 'Max tentatives');
+                            }
+                        });
+                    }, 300);
+                }
+            } catch (e) {}
+        }
+    });
+}
+
+// ============================================
+// UI T4
+// ============================================
+
+setTimeout(function() {
+    const t4Panel = document.createElement('div');
+    t4Panel.style.cssText = 'position:fixed;top:100px;right:20px;z-index:10002;background:rgba(0,0,0,0.9);padding:15px;border-radius:10px;border:2px solid #e74c3c;color:white;min-width:250px;';
+    t4Panel.innerHTML = '<div style="font-size:16px;font-weight:bold;margin-bottom:10px;color:#e74c3c;">⚙️ Config T4</div><div style="margin-bottom:10px;"><label style="display:block;font-size:12px;margin-bottom:5px;">Délai (ms):</label><input type="number" id="t4-delay" value="500" min="100" max="5000" style="width:100%;padding:5px;background:#34495e;border:1px solid #4a5f7f;border-radius:4px;color:white;"></div><div style="margin-bottom:10px;"><label style="display:block;font-size:12px;margin-bottom:5px;">Max tentatives:</label><input type="number" id="t4-max" value="50" min="1" max="200" style="width:100%;padding:5px;background:#34495e;border:1px solid #4a5f7f;border-radius:4px;color:white;"></div><button id="t4-save" style="width:100%;padding:10px;background:linear-gradient(145deg,#3498db,#2980b9);border:none;border-radius:6px;color:white;font-weight:bold;cursor:pointer;">💾 Sauvegarder composition</button><div id="t4-status" style="margin-top:10px;font-size:11px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px;text-align:center;">⚪ En attente</div>';
+    document.body.appendChild(t4Panel);
+    
+    document.getElementById('t4-delay').addEventListener('change', function() {
+        t4RetrySettings.retryDelay = parseInt(this.value) || 500;
+    });
+    document.getElementById('t4-max').addEventListener('change', function() {
+        t4RetrySettings.maxRetries = parseInt(this.value) || 50;
+    });
+    document.getElementById('t4-save').addEventListener('click', function() {
+        const inputs = document.querySelectorAll('.send_units_form input.unit_input, .attack_form input[type="text"]');
+        const units = {};
+        inputs.forEach(function(input) {
+            const val = parseInt(input.value);
+            if (val && val > 0) units[input.name] = val;
+        });
+        if (Object.keys(units).length > 0) {
+            t4SaveUnitsForTown(uw.Game.townId, units);
+            document.getElementById('t4-status').innerHTML = '✅ ' + Object.keys(units).length + ' types sauvegardés';
+        }
+    });
+}, 3000);
+
+console.log('[CALAGE T4] Méthode T4 activée');
