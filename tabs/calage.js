@@ -11,13 +11,6 @@ const AVANCE_LANCEMENT = 20000;
 const LIMITE_HORS_TOLERANCE = 10000;
 const DELAI_APRES_ANNULATION = 800;
 
-// ============================================
-// CONFIGURATION T4
-// ============================================
-const T4_CONFIG = {FILL_DELAY:500,CLICK_DELAY:300,USE_T4_METHOD:true};
-let t4SavedUnits = {};
-let t4RetrySettings = {retryDelay:500,maxRetries:50};
-
 let calageData = {
     attaques: [],
     attaqueEnCours: null,
@@ -231,87 +224,12 @@ function getTimeInMs(timeStr) {
     return date.getTime();
 }
 
-// ============================================
-// FONCTIONS T4
-// ============================================
-function t4SaveUnitsForTown(townId, units) {
-    t4SavedUnits[townId] = [];
-    for (const unitId in units) {
-        if (units.hasOwnProperty(unitId) && units[unitId] > 0) {
-            t4SavedUnits[townId].push({name:unitId,value:units[unitId]});
-        }
-    }
-    try { localStorage.setItem('t4_calage_units_'+townId,JSON.stringify(t4SavedUnits[townId])); } catch(e) {}
-    return t4SavedUnits[townId].length > 0;
-}
-
-function t4LoadUnitsForTown(townId) {
-    if (t4SavedUnits[townId]) return t4SavedUnits[townId];
-    try {
-        const saved = localStorage.getItem('t4_calage_units_'+townId);
-        if (saved) {
-            t4SavedUnits[townId] = JSON.parse(saved);
-            return t4SavedUnits[townId];
-        }
-    } catch(e) {}
-    return null;
-}
-
-function t4FillUnitsFields(units) {
-    return new Promise(function(resolve) {
-        try {
-            units.forEach(function(unit) {
-                const input = document.querySelector('input[name="'+unit.name+'"]');
-                if (input) {
-                    input.value = unit.value;
-                    input.dispatchEvent(new Event('change',{bubbles:true}));
-                    input.dispatchEvent(new Event('input',{bubbles:true}));
-                }
-            });
-            setTimeout(function(){resolve(true);},T4_CONFIG.FILL_DELAY);
-        } catch(e) {resolve(false);}
-    });
-}
-
-function t4ClickSendButton() {
-    return new Promise(function(resolve) {
-        try {
-            const selectors = ['div.button_new[name="Attaquer"]','#btn_attack_town .button_new','.btn_attack'];
-            let sendBtn = null;
-            for (let i=0; i<selectors.length; i++) {
-                sendBtn = document.querySelector(selectors[i]);
-                if (sendBtn) break;
-            }
-            if (sendBtn) {
-                sendBtn.click();
-                setTimeout(function(){resolve(true);},T4_CONFIG.CLICK_DELAY);
-            } else {
-                resolve(false);
-            }
-        } catch(e) {resolve(false);}
-    });
-}
-
-function t4CancelCommand(commandId) {
-    return new Promise(function(resolve) {
-        uw.$.ajax({
-            url:'/game/frontend_bridge?town_id='+uw.Game.townId+'&action=execute&h='+uw.Game.csrfToken,
-            type:'POST',
-            data:{json:JSON.stringify({model_url:'Commands',action_name:'cancelCommand',captcha:null,arguments:{id:commandId,town_id:uw.Game.townId,nl_init:true}})},
-            success:function(){resolve(true);},
-            error:function(){resolve(false);}
-        });
-    });
-}
-
-
 module.render = function(container) {
     container.innerHTML = `
         <div class="calage-tabs">
             <button class="calage-tab active" data-view="plans">📋 Mes Plans</button>
             <button class="calage-tab" data-view="nouveau">+ Nouveau Plan</button>
             <button class="calage-tab" data-view="edition" id="calage-tab-edition" style="display:none;">✏️ Edition</button>
-            <button class="calage-tab" data-view="config-t4">⚙️ Config T4</button>
         </div>
         
         <div class="calage-content">
@@ -413,70 +331,19 @@ module.render = function(container) {
                         </select>
                     </div>
                     
+                    <div class="calage-units-title">🗡️ Unites terrestres</div>
+                    <div class="calage-units-grid" id="calage-edit-units-terre"></div>
                     
-                    <!-- SECTION T4: Configuration des unités -->
-                    <div style="background:rgba(52,152,219,0.15);border:1px solid rgba(52,152,219,0.4);border-radius:8px;padding:15px;margin:15px 0;">
-                        <div style="font-size:13px;font-weight:bold;color:#5DADE2;margin-bottom:12px;">
-                            ⚙️ Configuration T4 (Méthode Simulation)
-                        </div>
-                        
-                        <div style="background:rgba(0,0,0,0.3);padding:10px;border-radius:6px;margin-bottom:12px;font-size:11px;color:#BDB76B;">
-                            💡 <strong>Méthode T4:</strong> Au lieu de saisir manuellement les unités, vous configurez une composition par ville.<br>
-                            Le bot ouvrira la fenêtre d'attaque et simulera les clicks comme un humain.
-                        </div>
-                        
-                        <div style="margin-bottom:10px;">
-                            <button class="calage-btn calage-btn-warning calage-btn-sm" id="calage-btn-open-attack-t4" style="width:100%;">
-                                🎯 Ouvrir fenêtre d'attaque pour sauvegarder
-                            </button>
-                        </div>
-                        
-                        <div id="calage-t4-comp-status" style="background:rgba(0,0,0,0.4);padding:10px;border-radius:6px;font-size:11px;text-align:center;color:#8B8B83;">
-                            ⚪ Aucune composition sauvegardée pour cette ville
-                        </div>
-                        
-                        <div style="margin-top:15px;padding:10px;background:rgba(155,89,182,0.1);border-radius:6px;border-left:3px solid #9B59B6;">
-                            <div style="font-size:11px;font-weight:bold;color:#BB8FCE;margin-bottom:8px;">📝 Instructions:</div>
-                            <ol style="font-size:11px;color:#BDB76B;margin:0;padding-left:20px;line-height:1.6;">
-                                <li>Cliquez sur "🎯 Ouvrir fenêtre d'attaque"</li>
-                                <li>Une fenêtre s'ouvre avec la ville sélectionnée</li>
-                                <li>Remplissez les unités que vous voulez envoyer</li>
-                                <li>Un bouton "💾 Sauvegarder composition" apparaît</li>
-                                <li>Cliquez dessus pour sauvegarder</li>
-                                <li>Vous pouvez ensuite ajouter l'attaque au plan</li>
-                            </ol>
-                        </div>
-                    </div>
+                    <div class="calage-units-title">⚓ Unites navales</div>
+                    <div class="calage-units-grid" id="calage-edit-units-naval"></div>
                     
-                    <!-- Configuration des tentatives T4 -->
-                    <div style="background:rgba(46,204,113,0.1);border:1px solid rgba(46,204,113,0.3);border-radius:8px;padding:12px;margin:15px 0;">
-                        <div style="font-size:12px;font-weight:bold;color:#52BE80;margin-bottom:10px;">
-                            🔄 Paramètres de retry automatique
+                    <div id="calage-capacity-container" class="calage-capacity" style="display:none;">
+                        <div class="calage-capacity-label">
+                            <span>Capacite de transport</span>
+                            <span id="calage-capacity-text">0 / 0</span>
                         </div>
-                        
-                        <div class="calage-row">
-                            <label style="font-size:11px;">Délai entre tentatives:</label>
-                            <select id="calage-t4-retry-delay" class="calage-select calage-select-small">
-                                <option value="200">200ms (Rapide)</option>
-                                <option value="500" selected>500ms (Normal)</option>
-                                <option value="1000">1s (Sécurisé)</option>
-                                <option value="2000">2s (Très sûr)</option>
-                            </select>
-                        </div>
-                        
-                        <div class="calage-row">
-                            <label style="font-size:11px;">Tentatives max:</label>
-                            <select id="calage-t4-max-retries" class="calage-select calage-select-small">
-                                <option value="10">10 fois</option>
-                                <option value="20">20 fois</option>
-                                <option value="50" selected>50 fois</option>
-                                <option value="100">100 fois</option>
-                                <option value="200">200 fois</option>
-                            </select>
-                        </div>
-                        
-                        <div style="font-size:10px;color:#7DCEA0;margin-top:8px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px;">
-                            ℹ️ Le bot réessaiera automatiquement si le timing n'est pas parfait, jusqu'à réussir ou atteindre le max
+                        <div class="calage-capacity-bar">
+                            <div class="calage-capacity-fill" id="calage-capacity-fill" style="width: 0%"></div>
                         </div>
                     </div>
                     
@@ -496,46 +363,6 @@ module.render = function(container) {
                 <div class="calage-row calage-row-between">
                     <button class="calage-btn calage-btn-secondary" id="calage-btn-retour">← Retour</button>
                     <button class="calage-btn calage-btn-primary" id="calage-btn-sauver-plan">💾 Sauvegarder</button>
-                </div>
-            </div>
-
-            
-            <!-- Vue Config T4 Globale -->
-            <div class="calage-view" id="calage-view-config-t4">
-                <div class="calage-section">
-                    <h3>⚙️ Configuration Globale T4</h3>
-                    
-                    <div style="background:rgba(52,152,219,0.2);padding:15px;border-radius:8px;border-left:4px solid #3498DB;margin-bottom:20px;">
-                        <div style="font-size:14px;font-weight:bold;color:#5DADE2;margin-bottom:10px;">
-                            💡 Qu'est-ce que la méthode T4 ?
-                        </div>
-                        <div style="font-size:12px;color:#BDB76B;line-height:1.6;">
-                            La méthode T4 simule les actions d'un humain en:<br>
-                            ✅ Remplissant automatiquement les champs d'unités<br>
-                            ✅ Cliquant sur le bouton "Attaquer"<br>
-                            ✅ Vérifiant le timing d'arrivée<br>
-                            ✅ Annulant automatiquement si le timing est mauvais<br>
-                            ✅ Réessayant jusqu'au succès<br><br>
-                            <strong style="color:#52BE80;">Plus naturel et sécurisé</strong> qu'une requête AJAX directe !
-                        </div>
-                    </div>
-                    
-                    <div class="calage-section" style="background:rgba(155,89,182,0.15);">
-                        <h3>💾 Compositions sauvegardées</h3>
-                        <div id="calage-t4-all-comps"></div>
-                        
-                        <div style="margin-top:15px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;font-size:11px;color:#8B8B83;">
-                            💡 Les compositions sont sauvegardées automatiquement quand vous configurez une attaque dans l'édition de plan
-                        </div>
-                    </div>
-                    
-                    <div class="calage-row">
-                        <label>Activer méthode T4:</label>
-                        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-                            <input type="checkbox" id="t4-enabled-global" checked style="width:20px;height:20px;cursor:pointer;">
-                            <span style="font-size:12px;color:#BDB76B;">Utiliser simulation de clicks (recommandé)</span>
-                        </label>
-                    </div>
                 </div>
             </div>
         </div>
@@ -2117,44 +1944,6 @@ function lancerAttaque(atk) {
 }
 
 function envoyerAttaque(atk) {
-    if (!T4_CONFIG.USE_T4_METHOD) { envoyerAttaqueAJAX(atk); return; }
-    if (!doitContinuerAttaque(atk)) return;
-    
-    console.log('[T4] Tentative #'+atk.tentatives);
-    majStatus('T4: Tentative #'+atk.tentatives);
-    
-    const units = t4LoadUnitsForTown(atk.sourceId);
-    if (!units || units.length===0) {
-        log('CALAGE','Pas de composition T4 sauvegardée pour ville '+atk.sourceId,'error');
-        marquerAttaqueEchec(atk,'Pas de composition T4');
-        return;
-    }
-    
-    t4FillUnitsFields(units).then(function(filled) {
-        if (!filled) {
-            if (atk.tentatives < t4RetrySettings.maxRetries) {
-                atk.tentatives++;
-                setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
-            } else {
-                marquerAttaqueEchec(atk,'Max tentatives atteint');
-            }
-            return;
-        }
-        
-        t4ClickSendButton().then(function(clicked) {
-            if (!clicked) {
-                if (atk.tentatives < t4RetrySettings.maxRetries) {
-                    atk.tentatives++;
-                    setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
-                } else {
-                    marquerAttaqueEchec(atk,'Max tentatives atteint');
-                }
-            }
-        });
-    });
-}
-
-function envoyerAttaqueAJAX(atk) {
     if (!doitContinuerAttaque(atk)) {
         log('CALAGE', 'Attaque annulee (plan arrete ou attaque terminee)', 'warning');
         return;
@@ -2564,225 +2353,3 @@ function loadData() {
         } catch(e) {}
     }
 }
-
-
-// ============================================
-// T4 AJAX INTERCEPTION
-// ============================================
-if (typeof uw.$ !== 'undefined') {
-    uw.$(document).ajaxComplete(function(e,xhr,opt) {
-        if (!T4_CONFIG.USE_T4_METHOD) return;
-        const urlParts=opt.url.split("?");
-        const actionParam=(urlParts[1]||"").split("&")[1];
-        const action=actionParam?urlParts[0].substr(5)+'/'+actionParam.substr(7):"";
-        if (action==="/town_info/send_units") {
-            try {
-                const response=JSON.parse(xhr.responseText);
-                const notifs=response?.json?.notifications;
-                if (!notifs) return;
-                let mvIndex=-1;
-                for (let i=0;i<notifs.length;i++) {
-                    if (notifs[i].subject==='MovementsUnits') { mvIndex=i; break; }
-                }
-                if (mvIndex===-1) return;
-                const paramStr=notifs[mvIndex].param_str;
-                const movementData=JSON.parse(paramStr).MovementsUnits;
-                const arrivalAt=movementData.arrival_at;
-                const commandId=movementData.command_id||movementData.id;
-                const atk=calageData.attaqueEnCours;
-                if (!atk||atk.status!=='encours') return;
-                const targetMs=atk.heureArrivee;
-                const arrivalMs=arrivalAt*1000;
-                const diffMs=arrivalMs-targetMs;
-                const toleranceMoins=atk.toleranceMoins?Math.abs(atk.toleranceMoins)*1000:0;
-                const tolerancePlus=atk.tolerancePlus?atk.tolerancePlus*1000:0;
-                if (diffMs>=-toleranceMoins && diffMs<=tolerancePlus) {
-                    console.log('[T4] ✅ Calage réussi!');
-                    marquerAttaqueSucces(atk,commandId);
-                } else {
-                    console.log('[T4] ❌ Calage raté, diff:',Math.round(diffMs/1000)+'s');
-                    setTimeout(function() {
-                        t4CancelCommand(commandId).then(function() {
-                            if (atk.tentatives<t4RetrySettings.maxRetries) {
-                                atk.tentatives++;
-                                setTimeout(function(){if(doitContinuerAttaque(atk))envoyerAttaque(atk);},t4RetrySettings.retryDelay);
-                            } else {
-                                marquerAttaqueEchec(atk,'Max tentatives atteint');
-                            }
-                        });
-                    },300);
-                }
-            } catch(e) {
-                console.error('[T4] Erreur:',e);
-            }
-        }
-    });
-}
-
-// ============================================
-// T4 UI HANDLERS
-// ============================================
-setTimeout(function() {
-    // Handler pour le bouton "Ouvrir fenêtre d'attaque"
-    const btnOpenAttack = document.getElementById('calage-btn-open-attack-t4');
-    if (btnOpenAttack) {
-        btnOpenAttack.addEventListener('click', function() {
-            const sourceSelect = document.getElementById('calage-edit-source');
-            const townId = parseInt(sourceSelect.value);
-            
-            if (!townId) {
-                alert('⚠️ Sélectionnez d\'abord une ville source');
-                return;
-            }
-            
-            // Ouvrir la fenêtre d'attaque
-            const planCible = document.getElementById('calage-edit-cible').value;
-            if (planCible) {
-                uw.WMap.openTownInfo(parseInt(planCible));
-            } else {
-                uw.WMap.openTownInfo(townId);
-            }
-            
-            // Attendre que la fenêtre soit ouverte
-            setTimeout(function() {
-                const attackWindow = document.querySelector('.ui-dialog');
-                if (attackWindow) {
-                    // Ajouter le bouton de sauvegarde
-                    const saveBtn = document.createElement('button');
-                    saveBtn.textContent = '💾 Sauvegarder cette composition';
-                    saveBtn.style.cssText = 'margin:10px;padding:12px;background:linear-gradient(135deg,#28a745,#20c997);color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:13px;width:calc(100% - 20px);';
-                    
-                    saveBtn.onclick = function() {
-                        const inputs = document.querySelectorAll('.send_units_form input.unit_input, .attack_form input[type="text"], input[name*="unit_"]');
-                        const units = {};
-                        inputs.forEach(function(input) {
-                            const val = parseInt(input.value);
-                            if (val && val > 0) {
-                                units[input.name] = val;
-                            }
-                        });
-                        
-                        if (Object.keys(units).length > 0) {
-                            t4SaveUnitsForTown(townId, units);
-                            alert('✅ Composition sauvegardée!\n\n'+Object.keys(units).length+' types d\'unités enregistrés pour la ville '+townId);
-                            updateT4CompStatus();
-                            updateAllComps();
-                        } else {
-                            alert('⚠️ Aucune unité trouvée dans les champs');
-                        }
-                    };
-                    
-                    const dialogContent = attackWindow.querySelector('.ui-dialog-content, .gpwindow_content');
-                    if (dialogContent) {
-                        dialogContent.insertBefore(saveBtn, dialogContent.firstChild);
-                    }
-                }
-            }, 500);
-        });
-    }
-    
-    // Handler pour les selects de configuration T4
-    const retryDelaySelect = document.getElementById('calage-t4-retry-delay');
-    if (retryDelaySelect) {
-        retryDelaySelect.addEventListener('change', function() {
-            t4RetrySettings.retryDelay = parseInt(this.value);
-            console.log('[T4] Délai retry:', t4RetrySettings.retryDelay+'ms');
-        });
-    }
-    
-    const maxRetriesSelect = document.getElementById('calage-t4-max-retries');
-    if (maxRetriesSelect) {
-        maxRetriesSelect.addEventListener('change', function() {
-            t4RetrySettings.maxRetries = parseInt(this.value);
-            console.log('[T4] Max tentatives:', t4RetrySettings.maxRetries);
-        });
-    }
-    
-    // Handler pour la checkbox globale
-    const enabledCheck = document.getElementById('t4-enabled-global');
-    if (enabledCheck) {
-        enabledCheck.addEventListener('change', function() {
-            T4_CONFIG.USE_T4_METHOD = this.checked;
-            console.log('[T4] Méthode T4:', this.checked ? 'Activée' : 'Désactivée');
-        });
-    }
-    
-    // Handler pour la sélection de ville source (update status)
-    const sourceSelect = document.getElementById('calage-edit-source');
-    if (sourceSelect) {
-        sourceSelect.addEventListener('change', function() {
-            updateT4CompStatus();
-        });
-    }
-    
-    // Fonction pour mettre à jour le status de la composition
-    function updateT4CompStatus() {
-        const statusDiv = document.getElementById('calage-t4-comp-status');
-        const sourceSelect = document.getElementById('calage-edit-source');
-        
-        if (!statusDiv || !sourceSelect) return;
-        
-        const townId = parseInt(sourceSelect.value);
-        if (!townId) {
-            statusDiv.innerHTML = '⚪ Sélectionnez une ville source';
-            statusDiv.style.color = '#8B8B83';
-            return;
-        }
-        
-        const units = t4LoadUnitsForTown(townId);
-        
-        if (units && units.length > 0) {
-            statusDiv.innerHTML = '✅ Composition sauvegardée: <strong style="color:#52BE80;">'+units.length+' types d\'unités</strong>';
-            statusDiv.style.color = '#52BE80';
-            statusDiv.style.background = 'rgba(46,204,113,0.2)';
-        } else {
-            statusDiv.innerHTML = '⚠️ Aucune composition sauvegardée pour cette ville';
-            statusDiv.style.color = '#E67E22';
-            statusDiv.style.background = 'rgba(230,126,34,0.1)';
-        }
-    }
-    
-    // Fonction pour afficher toutes les compositions
-    function updateAllComps() {
-        const container = document.getElementById('calage-t4-all-comps');
-        if (!container) return;
-        
-        let html = '';
-        let hasComps = false;
-        
-        for (const townId in t4SavedUnits) {
-            if (t4SavedUnits[townId] && t4SavedUnits[townId].length > 0) {
-                hasComps = true;
-                const town = uw.ITowns.getTown(parseInt(townId));
-                const townName = town ? town.getName() : 'Ville '+townId;
-                
-                html += '<div style="background:rgba(0,0,0,0.3);padding:12px;border-radius:6px;margin-bottom:8px;">';
-                html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
-                html += '<div>';
-                html += '<strong style="color:#D4AF37;font-size:13px;">'+townName+'</strong><br>';
-                html += '<span style="color:#BDB76B;font-size:11px;">'+t4SavedUnits[townId].length+' types d\'unités sauvegardés</span>';
-                html += '</div>';
-                html += '<button onclick="delete t4SavedUnits[\''+townId+'\'];localStorage.removeItem(\'t4_calage_units_'+townId+'\');updateAllComps();" style="padding:6px 12px;background:rgba(231,76,60,0.8);border:none;border-radius:4px;color:white;cursor:pointer;font-size:10px;">🗑️ Supprimer</button>';
-                html += '</div>';
-                html += '</div>';
-            }
-        }
-        
-        if (!hasComps) {
-            html = '<div style="padding:20px;text-align:center;color:#8B8B83;font-size:12px;">Aucune composition sauvegardée</div>';
-        }
-        
-        container.innerHTML = html;
-    }
-    
-    // Exposer les fonctions globalement
-    window.updateT4CompStatus = updateT4CompStatus;
-    window.updateAllComps = updateAllComps;
-    
-    // Init
-    updateT4CompStatus();
-    updateAllComps();
-    
-}, 2000);
-
-console.log('[CALAGE T4] Script chargé avec méthode T4 intégrée');
