@@ -20,46 +20,47 @@
             "name": "Grinta",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "TCHAPALO",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "Eldryx",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "EnZoLegEnDEs",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "dark vador du 35",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
         {
             "name": "zankyx",
             "playerId": 0,
             "servers": ["*"],
-            "modules": ["info", "culture", "commerce", "farm", "build", "recruit", "naval", "calage", "parametre"],
+            "modules": ["*"],
             "comment": "Dodoagrrr 179"
         }
     ]
 }
+
 
 
 
