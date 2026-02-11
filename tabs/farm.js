@@ -19,7 +19,8 @@ let farmData = {
     },
     cycleCount: 0,
     interval: null,
-    nextCheckTime: 0
+    nextCheckTime: 0,
+    lastNoIslandLog: 0
 };
 
 module.render = function(container) {
@@ -229,7 +230,15 @@ async function executeFarmClaim() {
         const readyIslands = islandsInfo.filter(island => island.isReady && !island.isEmpty);
         
         if (readyIslands.length === 0) {
-            log('FARM', 'Aucune île prête à récolter', 'info');
+            // Ne logger qu'une fois toutes les 60 secondes pour éviter le spam
+            const now = Date.now();
+            if (!farmData.lastNoIslandLog || now - farmData.lastNoIslandLog > 60000) {
+                const nextAvailable = getNextAvailableCollection();
+                const mins = Math.floor(nextAvailable / 60000);
+                const secs = Math.floor((nextAvailable % 60000) / 1000);
+                log('FARM', `Aucune île prête. Prochaine dans ${mins}m ${secs}s`, 'info');
+                farmData.lastNoIslandLog = now;
+            }
             return;
         }
         
@@ -278,42 +287,83 @@ function getIslandsWithStatus() {
     const relations = uw.MM.getCollections()?.FarmTownPlayerRelation?.[0]?.models || [];
     const now = Math.floor(Date.now() / 1000);
     
-    // Créer une map des temps de loot par île
+    // Créer une map des temps de loot par île (basé sur island_x et island_y)
     const islandLootTimes = new Map();
+    
     for (const rel of relations) {
-        const townId = rel.attributes.town_id;
-        const lootableAt = rel.attributes.lootable_at || 0;
+        if (!rel.attributes) continue;
         
-        if (!islandLootTimes.has(townId)) {
-            islandLootTimes.set(townId, []);
+        const farmTownId = rel.attributes.farm_town_id;
+        const lootableAt = rel.attributes.lootable_at || 0;
+        const relationStatus = rel.attributes.relation_status;
+        
+        // Ignorer les villages de farm non conquis (relation_status !== 1)
+        if (relationStatus !== 1) continue;
+        
+        // Trouver la ville de farm correspondante pour obtenir ses coordonnées
+        try {
+            const farmTowns = uw.MM.getOnlyCollectionByName('FarmTown').models;
+            const farmTown = farmTowns.find(ft => ft.id === farmTownId);
+            
+            if (farmTown && farmTown.attributes) {
+                const islandKey = `${farmTown.attributes.island_x}_${farmTown.attributes.island_y}`;
+                
+                if (!islandLootTimes.has(islandKey)) {
+                    islandLootTimes.set(islandKey, []);
+                }
+                islandLootTimes.get(islandKey).push(lootableAt);
+            }
+        } catch (e) {
+            // Ignorer les erreurs
         }
-        islandLootTimes.get(townId).push(lootableAt);
     }
     
     for (const t of towns) {
         if (t.attributes.on_small_island) continue;
         
-        const islandId = t.attributes.island_id;
         const townId = t.attributes.id;
         const res = t.attributes.resources;
         const totalRes = (res.wood || 0) + (res.stone || 0) + (res.iron || 0);
         
-        // Obtenir le temps de loot minimum pour cette île
-        const lootTimes = islandLootTimes.get(townId) || [];
-        const minLootTime = lootTimes.length > 0 ? Math.min(...lootTimes) : 0;
-        const maxLootTime = lootTimes.length > 0 ? Math.max(...lootTimes) : 0;
+        // Obtenir les coordonnées de l'île de cette ville
+        let islandX, islandY;
+        try {
+            const town = uw.ITowns.getTown(townId);
+            islandX = town.getIslandCoordinateX();
+            islandY = town.getIslandCoordinateY();
+        } catch (e) {
+            continue;
+        }
         
-        // Vérifier si l'île est prête (au moins un village de farm disponible)
+        const islandKey = `${islandX}_${islandY}`;
+        const islandId = t.attributes.island_id;
+        
+        // Obtenir les temps de loot pour cette île
+        const lootTimes = islandLootTimes.get(islandKey) || [];
+        
+        if (lootTimes.length === 0) {
+            // Pas de villages de farm sur cette île
+            continue;
+        }
+        
+        // Trouver le temps minimum (premier village disponible)
+        const minLootTime = Math.min(...lootTimes);
+        const maxLootTime = Math.max(...lootTimes);
+        
+        // Vérifier si au moins un village est prêt
         const isReady = minLootTime <= now;
         
-        // Vérifier si l'île a des ressources disponibles
-        const isEmpty = farmData.settings.skipEmptyIslands && lootTimes.every(time => time > now);
+        // Vérifier si TOUS les villages sont en cooldown
+        const allOnCooldown = lootTimes.every(time => time > now);
+        const isEmpty = farmData.settings.skipEmptyIslands && allOnCooldown;
         
         const townData = { 
             id: townId, 
             name: t.attributes.name, 
             total: totalRes, 
             islandId,
+            islandX,
+            islandY,
             minLootTime,
             maxLootTime,
             isReady,
@@ -321,7 +371,7 @@ function getIslandsWithStatus() {
             farmCount: lootTimes.length
         };
         
-        // Sélectionner la ville avec le moins de ressources par île (mode least_resources)
+        // Sélectionner la ville avec le moins de ressources par île
         if (islandMap.has(islandId)) {
             const existing = islandMap.get(islandId);
             if (farmData.settings.mode === 'least_resources' && townData.total < existing.total) {
