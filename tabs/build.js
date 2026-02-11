@@ -32,13 +32,15 @@ const FR_TO_ID = {
 
 let buildData = {
     enabled: false,
+    gratisEnabled: false,
     settings: { interval: 2, webhook: '' },
-    stats: { built: 0 },
+    stats: { built: 0, gratisClaimed: 0 },
     queues: {},
     nextCheckTime: 0
 };
 
 let senateWatcherInterval = null;
+let gratisInterval = null;
 
 module.render = function(container) {
     container.innerHTML = `
@@ -52,6 +54,33 @@ module.render = function(container) {
                 <span class="toggle-slider"></span>
             </label>
         </div>
+
+        <div class="bot-section">
+            <div class="section-header">
+                <div class="section-title"><span>⚡</span> Auto Gratis</div>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                <div class="main-control inactive" id="gratis-control" style="margin-bottom: 15px;">
+                    <div class="control-info">
+                        <div class="control-label">Construction Instantanée Gratuite</div>
+                        <div class="control-status" id="gratis-status">Inactif</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-gratis">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 11px; color: #BDB76B;">
+                    <strong>ℹ️ Fonctionnement:</strong><br>
+                    • Clique automatiquement sur le bouton "Gratis" toutes les 2.5 secondes<br>
+                    • Termine instantanément les constructions de moins de 5 minutes<br>
+                    • Fonctionne uniquement quand le bouton est disponible<br>
+                    • Gratuit et sans limite d'utilisation
+                </div>
+            </div>
+        </div>
+
         <div class="bot-section">
             <div class="section-header">
                 <div class="section-title"><span>📊</span> Statistiques</div>
@@ -67,9 +96,14 @@ module.render = function(container) {
                         <span class="stat-value" id="build-stat-queued">0</span>
                         <span class="stat-label">En attente</span>
                     </div>
+                    <div class="stat-box">
+                        <span class="stat-value" id="build-stat-gratis">0</span>
+                        <span class="stat-label">Gratis utilisés</span>
+                    </div>
                 </div>
             </div>
         </div>
+
         <div class="bot-section">
             <div class="section-header">
                 <div class="section-title"><span>⏱️</span> Prochain Check</div>
@@ -82,6 +116,7 @@ module.render = function(container) {
                 </div>
             </div>
         </div>
+
         <div class="bot-section">
             <div class="section-header">
                 <div class="section-title"><span>⚙️</span> Options</div>
@@ -98,6 +133,7 @@ module.render = function(container) {
                 </div>
             </div>
         </div>
+
         <div class="bot-section">
             <div class="section-header">
                 <div class="section-title"><span>📋</span> File d'attente</div>
@@ -116,11 +152,13 @@ module.init = function() {
     loadData();
     
     document.getElementById('toggle-build').checked = buildData.enabled;
+    document.getElementById('toggle-gratis').checked = buildData.gratisEnabled;
     document.getElementById('build-interval').value = buildData.settings.interval;
     updateStats();
     updateQueueDisplay();
     
     document.getElementById('toggle-build').onchange = (e) => toggleBuild(e.target.checked);
+    document.getElementById('toggle-gratis').onchange = (e) => toggleGratis(e.target.checked);
     document.getElementById('build-interval').onchange = (e) => {
         buildData.settings.interval = parseInt(e.target.value);
         saveData();
@@ -142,6 +180,10 @@ module.init = function() {
         toggleBuild(true);
     }
 
+    if (buildData.gratisEnabled) {
+        toggleGratis(true);
+    }
+
     startSenateWatcher();
     startTimer();
     
@@ -154,7 +196,7 @@ module.init = function() {
 };
 
 module.isActive = function() {
-    return buildData.enabled;
+    return buildData.enabled || buildData.gratisEnabled;
 };
 
 module.onActivate = function(container) {
@@ -182,6 +224,95 @@ function toggleBuild(enabled) {
     saveData();
     if (window.GrepolisUltimate) {
         window.GrepolisUltimate.updateButtonState();
+    }
+}
+
+function toggleGratis(enabled) {
+    buildData.gratisEnabled = enabled;
+    const ctrl = document.getElementById('gratis-control');
+    const status = document.getElementById('gratis-status');
+    
+    if (enabled) {
+        ctrl.classList.remove('inactive');
+        status.textContent = 'Actif';
+        status.style.color = '#81C784';
+        log('BUILD', 'Auto Gratis activé', 'success');
+        
+        // Démarrer l'intervalle de vérification du bouton Gratis
+        if (gratisInterval) clearInterval(gratisInterval);
+        gratisInterval = setInterval(checkGratis, 2500);
+    } else {
+        ctrl.classList.add('inactive');
+        status.textContent = 'Inactif';
+        status.style.color = '#E57373';
+        log('BUILD', 'Auto Gratis désactivé', 'info');
+        
+        // Arrêter l'intervalle
+        if (gratisInterval) {
+            clearInterval(gratisInterval);
+            gratisInterval = null;
+        }
+    }
+    
+    saveData();
+    if (window.GrepolisUltimate) {
+        window.GrepolisUltimate.updateButtonState();
+    }
+}
+
+function checkGratis() {
+    try {
+        // Chercher le bouton Gratis disponible (pas désactivé)
+        const gratisButton = uw.$('.type_building_queue.type_free').not('.disabled');
+        
+        if (gratisButton.length > 0) {
+            // Cliquer sur le bouton
+            gratisButton.click();
+            
+            // Récupérer les informations de la ville actuelle
+            const town = uw.ITowns.getCurrentTown();
+            if (!town) return;
+            
+            // Chercher une construction de moins de 5 minutes (300 secondes)
+            const buildingOrders = town.buildingOrders();
+            if (!buildingOrders || !buildingOrders.models) return;
+            
+            for (let model of buildingOrders.models) {
+                if (model.attributes && model.attributes.building_time < 300) {
+                    callGratis(town.id, model.id);
+                    return;
+                }
+            }
+        }
+    } catch (e) {
+        log('BUILD', `Erreur Auto Gratis: ${e.message}`, 'error');
+    }
+}
+
+function callGratis(townId, orderId) {
+    try {
+        const data = {
+            model_url: `BuildingOrder/${orderId}`,
+            action_name: 'buyInstant',
+            arguments: { order_id: orderId },
+            town_id: townId
+        };
+        
+        const townName = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
+        
+        uw.gpAjax.ajaxPost('frontend_bridge', 'execute', data, null, {
+            success: function() {
+                buildData.stats.gratisClaimed++;
+                saveData();
+                updateStats();
+                log('BUILD', `${townName}: Gratis utilisé (Order ${orderId})`, 'success');
+            },
+            error: function(error) {
+                log('BUILD', `${townName}: Erreur Gratis: ${error}`, 'error');
+            }
+        });
+    } catch (e) {
+        log('BUILD', `Erreur callGratis: ${e.message}`, 'error');
     }
 }
 
@@ -398,13 +529,17 @@ function startTimer() {
 function updateStats() {
     const b = document.getElementById('build-stat-built');
     const q = document.getElementById('build-stat-queued');
+    const g = document.getElementById('build-stat-gratis');
+    
     if (b) b.textContent = buildData.stats.built;
     if (q) q.textContent = Object.values(buildData.queues).reduce((a, queue) => a + queue.length, 0);
+    if (g) g.textContent = buildData.stats.gratisClaimed;
 }
 
 function saveData() {
     GM_setValue('gu_build_data', JSON.stringify({
         enabled: buildData.enabled,
+        gratisEnabled: buildData.gratisEnabled,
         settings: buildData.settings,
         stats: buildData.stats,
         queues: buildData.queues
