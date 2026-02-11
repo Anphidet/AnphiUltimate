@@ -101,20 +101,53 @@
     // Récupérer l'or du joueur
     function getGoldForPlayer() {
         try {
+            // Méthode 1 : DOM #gold_amount (le plus fiable)
             const domGold = document.getElementById('gold_amount');
             if (domGold) {
                 const goldText = domGold.textContent.replace(/[^0-9]/g, '');
                 if (goldText) {
-                    return parseInt(goldText);
+                    const gold = parseInt(goldText);
+                    if (!isNaN(gold)) return gold;
                 }
             }
             
+            // Méthode 2 : Vérifier aussi avec .amount dans le DOM
+            const goldAmountEl = document.querySelector('.gold .amount');
+            if (goldAmountEl) {
+                const goldText = goldAmountEl.textContent.replace(/[^0-9]/g, '');
+                if (goldText) {
+                    const gold = parseInt(goldText);
+                    if (!isNaN(gold)) return gold;
+                }
+            }
+            
+            // Méthode 3 : MM collections
             if (uw.MM && uw.MM.getOnlyCollectionByName) {
                 const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
                 if (playerGold && playerGold.models && playerGold.models.length > 0) {
                     const gold = playerGold.models[0].get('gold');
-                    if (gold !== undefined) return gold;
+                    if (gold !== undefined && !isNaN(gold)) return gold;
                 }
+            }
+            
+            // Méthode 4 : MM modèles
+            if (uw.MM && uw.MM.getModels) {
+                const models = uw.MM.getModels();
+                if (models.PlayerLedger) {
+                    for (let id in models.PlayerLedger) {
+                        const ledger = models.PlayerLedger[id];
+                        if (ledger && typeof ledger.get === 'function') {
+                            const gold = ledger.get('gold');
+                            if (gold !== undefined && !isNaN(gold)) return gold;
+                        }
+                    }
+                }
+            }
+            
+            // Méthode 5 : Game object
+            if (uw.Game && uw.Game.premium_features) {
+                const gold = uw.Game.premium_features.gold;
+                if (gold !== undefined && !isNaN(gold)) return gold;
             }
         } catch (e) {
             // Ignorer les erreurs
@@ -125,10 +158,78 @@
     // Récupérer les points de combat
     function getBattlePointsForPlayer() {
         try {
-            const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints');
-            if (killpoints && killpoints.attributes) {
-                return killpoints.attributes.att || 0;
+            // Méthode 1 : DOM .nui_battlepoints_container .points
+            const bpSelectors = [
+                '.nui_battlepoints_container .points',
+                '.nui_battlepoints_container > .points',
+                '.nui_battlepoints_container div.points'
+            ];
+            
+            for (let sel of bpSelectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const txt = el.textContent.trim().replace(/[.\s,]/g, '');
+                    const v = parseInt(txt, 10);
+                    if (!isNaN(v) && v >= 0) {
+                        return v;
+                    }
+                }
             }
+            
+            // Méthode 2 : Chercher tous les éléments dans le container BP
+            const container = document.querySelector('.nui_battlepoints_container');
+            if (container) {
+                const allChildren = container.querySelectorAll('*');
+                for (let el of allChildren) {
+                    const txt = el.textContent.trim();
+                    if (/^\d[\d.\s,]*$/.test(txt)) {
+                        const v = parseInt(txt.replace(/[.\s,]/g, ''), 10);
+                        if (!isNaN(v) && v >= 0) return v;
+                    }
+                }
+            }
+            
+            // Méthode 3 : MM.getModelByNameAndPlayerId
+            if (uw.MM && typeof uw.MM.getModelByNameAndPlayerId === 'function') {
+                const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints');
+                if (killpoints && killpoints.attributes) {
+                    const att = killpoints.attributes.att;
+                    if (att !== undefined && !isNaN(att)) return att;
+                }
+            }
+            
+            // Méthode 4 : MM collections
+            if (uw.MM && uw.MM.getOnlyCollectionByName) {
+                const killpoints = uw.MM.getOnlyCollectionByName('PlayerKillpoints');
+                if (killpoints && killpoints.models && killpoints.models.length > 0) {
+                    const model = killpoints.models[0];
+                    if (model && typeof model.get === 'function') {
+                        const att = model.get('att');
+                        if (att !== undefined && !isNaN(att)) return att;
+                    }
+                }
+            }
+            
+            // Méthode 5 : MM modèles directs
+            if (uw.MM && uw.MM.getModels) {
+                const models = uw.MM.getModels();
+                if (models.PlayerKillpoints) {
+                    for (let id in models.PlayerKillpoints) {
+                        const obj = models.PlayerKillpoints[id];
+                        if (obj && obj.attributes && obj.attributes.att !== undefined) {
+                            const att = obj.attributes.att;
+                            if (!isNaN(att)) return att;
+                        }
+                    }
+                }
+            }
+            
+            // Méthode 6 : Game object
+            if (uw.Game && uw.Game.player_killpoints !== undefined) {
+                const att = uw.Game.player_killpoints;
+                if (!isNaN(att)) return att;
+            }
+            
         } catch (e) {
             // Ignorer les erreurs
         }
