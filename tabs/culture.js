@@ -1,9 +1,4 @@
-// Module Culture pour Grepolis Ultimate Bot
-// Basé sur AutoParty de ModernBot, adapté pour Ultimate Bot
-
 (function(module) {
-    'use strict';
-
     const uw = module.uw;
     const log = module.log;
     const GM_getValue = module.GM_getValue;
@@ -11,17 +6,13 @@
 
     // État du module
     let isActive = false;
-    let activeTypes = {
-        festival: false,
-        procession: false,
-        theater: false,
-        games: false
-    };
-    let singleMode = true; // true = toutes les villes, false = ville par ville
     let intervalId = null;
     let captchaActive = false;
     let captchaCheckInterval = null;
     let randomInterval = 0;
+    
+    // Configuration par ville : { townId: { festival: true, procession: false, ... } }
+    let townSettings = {};
     
     let stats = {
         festivalsLaunched: 0,
@@ -31,28 +22,54 @@
         lastCelebration: null
     };
 
-    // Charger la configuration
-    function loadConfig() {
-        isActive = GM_getValue('culture_active', false);
-        activeTypes = GM_getValue('culture_types', { festival: false, procession: false, theater: false, games: false });
-        singleMode = GM_getValue('culture_single', true);
-        
-        const savedStats = GM_getValue('culture_stats', null);
-        if (savedStats) {
-            try {
-                stats = JSON.parse(savedStats);
-            } catch (e) {
-                // Ignorer les erreurs
-            }
+    // Obtenir les paramètres d'une ville
+    function getTownSettings(townId) {
+        if (!townSettings[townId]) {
+            townSettings[townId] = {
+                festival: false,
+                procession: false,
+                theater: false,
+                games: false
+            };
         }
+        return townSettings[townId];
     }
 
-    // Sauvegarder la configuration
-    function saveConfig() {
-        GM_setValue('culture_active', isActive);
-        GM_setValue('culture_types', activeTypes);
-        GM_setValue('culture_single', singleMode);
-        GM_setValue('culture_stats', JSON.stringify(stats));
+    // Définir un paramètre pour une ville
+    function setTownSetting(townId, type, enabled) {
+        if (!townSettings[townId]) {
+            townSettings[townId] = {
+                festival: false,
+                procession: false,
+                theater: false,
+                games: false
+            };
+        }
+        townSettings[townId][type] = enabled;
+        saveConfig();
+    }
+
+    // Vérifier si une ville a des célébrations actives
+    function hasTownAnyCelebrationEnabled(townId) {
+        const settings = getTownSettings(townId);
+        return settings.festival || settings.procession || settings.theater || settings.games;
+    }
+
+    // Obtenir toutes les villes du joueur
+    function getAllTowns() {
+        const towns = [];
+        try {
+            for (let townId in uw.ITowns.towns) {
+                const town = uw.ITowns.towns[townId];
+                towns.push({
+                    id: parseInt(townId),
+                    name: town.getName ? town.getName() : town.name || `Ville ${townId}`
+                });
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+        return towns;
     }
 
     // Fonction sleep
@@ -60,56 +77,392 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Obtenir la liste des célébrations actives
+    // Récupérer les célébrations en cours
     function getCelebrationsList(type) {
+        const list = [];
         try {
-            const celebrationModels = uw.MM.getModels().Celebration;
-            if (typeof celebrationModels === 'undefined') return [];
-            
-            const celebrations = Object.values(celebrationModels)
-                .filter(celebration => celebration.attributes.celebration_type === type)
-                .map(celebration => celebration.attributes.town_id);
-            
-            return celebrations;
+            const celebrations = uw.MM.getModels().Celebration;
+            if (celebrations) {
+                for (let id in celebrations) {
+                    const celeb = celebrations[id];
+                    if (celeb && celeb.attributes) {
+                        if (celeb.attributes.celebration_type === type) {
+                            list.push(celeb.attributes.town_id);
+                        }
+                    }
+                }
+            }
         } catch (e) {
-            log('CULTURE', `Erreur récupération célébrations: ${e.message}`, 'error');
-            return [];
+            // Ignorer les erreurs
         }
+        return list;
+    }
+
+    // Récupérer l'or du joueur
+    function getGoldForPlayer() {
+        try {
+            const domGold = document.getElementById('gold_amount');
+            if (domGold) {
+                const goldText = domGold.textContent.replace(/[^0-9]/g, '');
+                if (goldText) {
+                    return parseInt(goldText);
+                }
+            }
+            
+            if (uw.MM && uw.MM.getOnlyCollectionByName) {
+                const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
+                if (playerGold && playerGold.models && playerGold.models.length > 0) {
+                    const gold = playerGold.models[0].get('gold');
+                    if (gold !== undefined) return gold;
+                }
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+        return 0;
+    }
+
+    // Récupérer les points de combat
+    function getBattlePointsForPlayer() {
+        try {
+            const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints');
+            if (killpoints && killpoints.attributes) {
+                return killpoints.attributes.att || 0;
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+        return 0;
+    }
+
+    // Obtenir le niveau d'un bâtiment
+    function getBuildingLevel(townId, buildingId) {
+        try {
+            const town = uw.ITowns.getTown(townId);
+            if (town && town.getBuildings) {
+                const buildings = town.getBuildings();
+                if (buildings && buildings.attributes) {
+                    return buildings.attributes[buildingId] || 0;
+                }
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+        return 0;
+    }
+
+    // Vérifier si une célébration est en cours dans une ville
+    function getCelebrationInProgress(townId) {
+        try {
+            const celebrations = uw.MM.getModels().Celebration;
+            if (celebrations) {
+                for (let id in celebrations) {
+                    const celeb = celebrations[id];
+                    if (celeb && celeb.attributes && celeb.attributes.town_id == townId) {
+                        return true;
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+        return false;
     }
 
     // Lancer une célébration
     function makeCelebration(type, townId) {
         try {
-            if (typeof townId === 'undefined') {
-                const data = {
-                    celebration_type: type
-                };
-                uw.gpAjax.ajaxPost('town_overviews', 'start_all_celebrations', data, null, {
-                    success: function() {
-                        log('CULTURE', `Célébration ${type} lancée dans toutes les villes`, 'success');
-                        updateStats(type);
-                    },
-                    error: function(error) {
-                        log('CULTURE', `Erreur lancement ${type}: ${error}`, 'error');
+            const data = {
+                celebration_type: type,
+                town_id: townId
+            };
+            
+            uw.gpAjax.ajaxPost('building_place', 'start_celebration', data, null, {
+                success: function() {
+                    stats.lastCelebration = new Date().toISOString();
+                    updateStats(type);
+                    saveConfig();
+                    updateStatsDisplay();
+                },
+                error: function(error) {
+                    // Ne log que les erreurs importantes (pas "already celebrating")
+                    if (error && !error.toString().includes('already')) {
+                        log('CULTURE', `Erreur ${type}: ${error}`, 'error');
                     }
-                });
-            } else {
-                const data = {
-                    celebration_type: type,
-                    town_id: townId
-                };
-                uw.gpAjax.ajaxPost('building_place', 'start_celebration', data, null, {
-                    success: function() {
-                        log('CULTURE', `Célébration ${type} lancée dans ville ${townId}`, 'success');
-                        updateStats(type);
-                    },
-                    error: function(error) {
-                        log('CULTURE', `Erreur lancement ${type} ville ${townId}: ${error}`, 'error');
-                    }
-                });
-            }
+                }
+            });
         } catch (e) {
             log('CULTURE', `Erreur makeCelebration: ${e.message}`, 'error');
+        }
+    }
+
+    // Vérifier et lancer les festivals
+    async function checkParty() {
+        try {
+            let max = 10;
+            const party = getCelebrationsList('party');
+            let launched = 0;
+            
+            for (let townId in uw.ITowns.towns) {
+                if (party.includes(parseInt(townId))) continue;
+                
+                const settings = getTownSettings(townId);
+                if (!settings.festival) continue;
+                
+                const town = uw.ITowns.towns[townId];
+                if (town.getBuildings().attributes.academy < 30) continue;
+                
+                const { wood, stone, iron } = town.resources();
+                if (wood < 15000 || stone < 18000 || iron < 15000) continue;
+                
+                makeCelebration('party', townId);
+                launched++;
+                await sleep(750);
+                max -= 1;
+                
+                if (max <= 0) break;
+            }
+            
+            if (launched > 0) {
+                log('CULTURE', `${launched} festival(s) lancé(s)`, 'success');
+            }
+        } catch (e) {
+            log('CULTURE', `Erreur checkParty: ${e.message}`, 'error');
+        }
+    }
+
+    // Vérifier et lancer les processions
+    async function checkTriumph() {
+        try {
+            let max = 10;
+            const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints').attributes;
+            let available = killpoints.att + killpoints.def - killpoints.used;
+            
+            if (available < 300) return;
+
+            const triumph = getCelebrationsList('triumph');
+            let launched = 0;
+            
+            for (let townId in uw.ITowns.towns) {
+                if (triumph.includes(parseInt(townId))) continue;
+                
+                const settings = getTownSettings(townId);
+                if (!settings.procession) continue;
+                
+                if (available < 300) break;
+                
+                makeCelebration('triumph', townId);
+                launched++;
+                available -= 300;
+                await sleep(500);
+                max -= 1;
+                
+                if (max <= 0) break;
+            }
+            
+            if (launched > 0) {
+                log('CULTURE', `${launched} procession(s) lancée(s)`, 'success');
+            }
+        } catch (e) {
+            log('CULTURE', `Erreur checkTriumph: ${e.message}`, 'error');
+        }
+    }
+
+    // Vérifier et lancer les théâtres
+    async function checkTheater() {
+        try {
+            let max = 10;
+            const theater = getCelebrationsList('theater');
+            let launched = 0;
+            
+            for (let townId in uw.ITowns.towns) {
+                if (theater.includes(parseInt(townId))) continue;
+                
+                const settings = getTownSettings(townId);
+                if (!settings.theater) continue;
+                
+                const town = uw.ITowns.towns[townId];
+                if (town.getBuildings().attributes.theater !== 1) continue;
+                
+                const { wood, stone, iron } = town.resources();
+                if (wood < 10000 || stone < 12000 || iron < 10000) continue;
+                
+                makeCelebration('theater', townId);
+                launched++;
+                await sleep(500);
+                max -= 1;
+                
+                if (max <= 0) break;
+            }
+            
+            if (launched > 0) {
+                log('CULTURE', `${launched} théâtre(s) lancé(s)`, 'success');
+            }
+        } catch (e) {
+            log('CULTURE', `Erreur checkTheater: ${e.message}`, 'error');
+        }
+    }
+
+    // Vérifier et lancer les Jeux Olympiques
+    async function checkGames() {
+        try {
+            let max = 10;
+            const games = getCelebrationsList('games');
+            
+            const gold = getGoldForPlayer();
+            if (gold < 50) return;
+
+            let availableGold = gold;
+            const goldPerTown = 50;
+            let launched = 0;
+            
+            for (let townId in uw.ITowns.towns) {
+                if (games.includes(parseInt(townId))) continue;
+                
+                const settings = getTownSettings(townId);
+                if (!settings.games) continue;
+                
+                const town = uw.ITowns.towns[townId];
+                if (town.getBuildings().attributes.academy < 30) continue;
+                
+                if (availableGold < goldPerTown) break;
+                
+                makeCelebration('games', townId);
+                launched++;
+                availableGold -= goldPerTown;
+                await sleep(750);
+                max -= 1;
+                
+                if (max <= 0) break;
+            }
+            
+            if (launched > 0) {
+                log('CULTURE', `${launched} jeux olympique(s) lancé(s)`, 'success');
+            }
+        } catch (e) {
+            log('CULTURE', `Erreur checkGames: ${e.message}`, 'error');
+        }
+    }
+
+    // Boucle principale
+    async function mainLoop() {
+        if (!isActive || captchaActive) return;
+
+        try {
+            await checkTriumph();
+            await checkParty();
+            await checkTheater();
+            await checkGames();
+        } catch (e) {
+            log('CULTURE', `Erreur boucle principale: ${e.message}`, 'error');
+        }
+    }
+
+    // Vérifier la présence d'un captcha
+    function checkCaptcha() {
+        try {
+            const hasCaptcha = uw.$('.botcheck').length > 0 || uw.$('#recaptcha_window').length > 0;
+            
+            if (hasCaptcha && !captchaActive) {
+                captchaActive = true;
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+                log('CULTURE', '⚠️ Captcha détecté - Bot en pause', 'warning');
+            } else if (!hasCaptcha && captchaActive) {
+                captchaActive = false;
+                randomInterval = Math.floor(Math.random() * 45000) + 5000;
+                intervalId = setInterval(mainLoop, randomInterval);
+                log('CULTURE', '✅ Captcha résolu - Bot redémarré', 'success');
+            }
+        } catch (e) {
+            // Ignorer les erreurs
+        }
+    }
+
+    // Démarrer le bot
+    function start() {
+        if (isActive) return;
+        
+        isActive = true;
+        updateStatus();
+        
+        // Vérifier qu'au moins une ville a une célébration activée
+        const towns = getAllTowns();
+        let hasAnyCelebration = false;
+        for (let town of towns) {
+            if (hasTownAnyCelebrationEnabled(town.id)) {
+                hasAnyCelebration = true;
+                break;
+            }
+        }
+        
+        if (!hasAnyCelebration) {
+            log('CULTURE', 'Aucune célébration activée. Configurez au moins une ville.', 'warning');
+        } else {
+            log('CULTURE', 'Bot démarré', 'success');
+        }
+        
+        randomInterval = Math.floor(Math.random() * 45000) + 5000;
+        intervalId = setInterval(mainLoop, randomInterval);
+        
+        if (!captchaCheckInterval) {
+            captchaCheckInterval = setInterval(checkCaptcha, 300);
+        }
+        
+        saveConfig();
+        
+        if (window.GrepolisUltimate) {
+            window.GrepolisUltimate.updateButtonState();
+        }
+    }
+
+    // Arrêter le bot
+    function stop() {
+        if (!isActive) return;
+
+        isActive = false;
+        updateStatus();
+        
+        if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+        }
+        
+        if (captchaCheckInterval) {
+            clearInterval(captchaCheckInterval);
+            captchaCheckInterval = null;
+        }
+
+        log('CULTURE', 'Bot arrêté', 'info');
+        saveConfig();
+        
+        if (window.GrepolisUltimate) {
+            window.GrepolisUltimate.updateButtonState();
+        }
+    }
+
+    // Mettre à jour le statut visuel
+    function updateStatus() {
+        const statusEl = document.getElementById('culture-status');
+        if (statusEl) {
+            statusEl.textContent = isActive ? 'Actif' : 'Inactif';
+            statusEl.style.color = isActive ? '#81C784' : '#E57373';
+        }
+
+        const toggleInput = document.getElementById('culture-toggle');
+        if (toggleInput) {
+            toggleInput.checked = isActive;
+        }
+
+        const mainControl = document.querySelector('#tab-culture .main-control');
+        if (mainControl) {
+            if (isActive) {
+                mainControl.classList.remove('inactive');
+            } else {
+                mainControl.classList.add('inactive');
+            }
         }
     }
 
@@ -131,321 +484,6 @@
         updateStatsDisplay();
     }
 
-    // Vérifier et lancer les festivals
-    async function checkParty() {
-        try {
-            let max = 10;
-            const party = getCelebrationsList('party');
-            
-            if (singleMode) {
-                // Mode "Toutes les villes"
-                for (let townId in uw.ITowns.towns) {
-                    if (party.includes(parseInt(townId))) continue;
-                    
-                    const town = uw.ITowns.towns[townId];
-                    if (town.getBuildings().attributes.academy < 30) continue;
-                    
-                    const { wood, stone, iron } = town.resources();
-                    if (wood < 15000 || stone < 18000 || iron < 15000) continue;
-                    
-                    makeCelebration('party', townId);
-                    await sleep(750);
-                    max -= 1;
-                    
-                    if (max <= 0) return;
-                }
-            } else {
-                // Mode "Une seule ville"
-                if (party.length > 1) return;
-                makeCelebration('party');
-            }
-        } catch (e) {
-            log('CULTURE', `Erreur checkParty: ${e.message}`, 'error');
-        }
-    }
-
-    // Vérifier et lancer les processions
-    async function checkTriumph() {
-        try {
-            let max = 10;
-            const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints').attributes;
-            let available = killpoints.att + killpoints.def - killpoints.used;
-            
-            if (available < 300) {
-                log('CULTURE', 'Pas assez de points de conquête (< 300)', 'info');
-                return;
-            }
-
-            const triumph = getCelebrationsList('triumph');
-            
-            if (!singleMode) {
-                // Mode "Ville par ville" (inversé dans le code original)
-                for (let townId in uw.ITowns.towns) {
-                    if (triumph.includes(parseInt(townId))) continue;
-                    
-                    makeCelebration('triumph', townId);
-                    await sleep(500);
-                    available -= 300;
-                    
-                    if (available < 300) return;
-                    max -= 1;
-                    
-                    if (max <= 0) return;
-                }
-            } else {
-                // Mode "Toutes les villes"
-                if (triumph.length > 1) return;
-                makeCelebration('triumph');
-            }
-        } catch (e) {
-            log('CULTURE', `Erreur checkTriumph: ${e.message}`, 'error');
-        }
-    }
-
-    // Vérifier et lancer les théâtres
-    async function checkTheater() {
-        try {
-            let max = 10;
-            const theater = getCelebrationsList('theater');
-            
-            if (singleMode) {
-                // Mode "Toutes les villes"
-                for (let townId in uw.ITowns.towns) {
-                    if (theater.includes(parseInt(townId))) continue;
-                    
-                    const town = uw.ITowns.towns[townId];
-                    if (town.getBuildings().attributes.theater !== 1) continue;
-                    
-                    const { wood, stone, iron } = town.resources();
-                    if (wood < 10000 || stone < 12000 || iron < 10000) continue;
-                    
-                    makeCelebration('theater', townId);
-                    await sleep(500);
-                    max -= 1;
-                    
-                    if (max <= 0) return;
-                }
-            } else {
-                // Mode "Une seule ville"
-                if (theater.length > 1) return;
-                makeCelebration('theater');
-            }
-        } catch (e) {
-            log('CULTURE', `Erreur checkTheater: ${e.message}`, 'error');
-        }
-    }
-
-    // Vérifier et lancer les Jeux Olympiques
-    async function checkGames() {
-        try {
-            let max = 10;
-            const games = getCelebrationsList('games');
-            
-            // Vérifier l'or disponible
-            const gold = getGoldForPlayer();
-            if (gold < 50) {
-                log('CULTURE', 'Pas assez d\'or pour les Jeux Olympiques (< 50)', 'info');
-                return;
-            }
-
-            if (singleMode) {
-                // Mode "Toutes les villes"
-                const goldPerTown = 50;
-                let availableGold = gold;
-                
-                for (let townId in uw.ITowns.towns) {
-                    if (games.includes(parseInt(townId))) continue;
-                    
-                    const town = uw.ITowns.towns[townId];
-                    if (town.getBuildings().attributes.academy < 30) continue;
-                    
-                    if (availableGold < goldPerTown) {
-                        log('CULTURE', 'Or insuffisant pour continuer les Jeux Olympiques', 'warning');
-                        break;
-                    }
-                    
-                    makeCelebration('games', townId);
-                    availableGold -= goldPerTown;
-                    await sleep(750);
-                    max -= 1;
-                    
-                    if (max <= 0) return;
-                }
-            } else {
-                // Mode "Une seule ville"
-                if (games.length > 1) return;
-                makeCelebration('games');
-            }
-        } catch (e) {
-            log('CULTURE', `Erreur checkGames: ${e.message}`, 'error');
-        }
-    }
-
-    // Fonction pour récupérer l'or du joueur
-    function getGoldForPlayer() {
-        try {
-            // Méthode 1 : DOM #gold_amount
-            const domGold = document.getElementById('gold_amount');
-            if (domGold) {
-                const goldText = domGold.textContent.replace(/[^0-9]/g, '');
-                if (goldText) {
-                    return parseInt(goldText);
-                }
-            }
-            
-            // Méthode 2 : MM collections
-            if (uw.MM && uw.MM.getOnlyCollectionByName) {
-                const playerGold = uw.MM.getOnlyCollectionByName('PlayerGold');
-                if (playerGold && playerGold.models && playerGold.models.length > 0) {
-                    const gold = playerGold.models[0].get('gold');
-                    if (gold !== undefined) return gold;
-                }
-            }
-            
-            // Méthode 3 : MM modèles
-            const models = uw.MM.getModels();
-            const goldModels = ['PlayerGold', 'PlayerLedger', 'PremiumFeatures', 'Player'];
-            for (let modelName of goldModels) {
-                if (models[modelName]) {
-                    for (let id in models[modelName]) {
-                        const obj = models[modelName][id];
-                        if (obj && typeof obj.get === 'function') {
-                            for (let attr of ['gold', 'premium_gold', 'player_gold']) {
-                                const val = obj.get(attr);
-                                if (val !== undefined && val !== null && typeof val === 'number') return val;
-                            }
-                        }
-                        if (obj && obj.attributes) {
-                            for (let attr of ['gold', 'premium_gold', 'player_gold']) {
-                                if (obj.attributes[attr] !== undefined) return obj.attributes[attr];
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e) {
-            log('CULTURE', `Erreur getGoldForPlayer: ${e.message}`, 'error');
-        }
-        return 0;
-    }
-
-    // Fonction principale exécutée en boucle
-    async function mainLoop() {
-        if (!isActive || captchaActive) return;
-
-        try {
-            if (activeTypes.procession) await checkTriumph();
-            if (activeTypes.festival) await checkParty();
-            if (activeTypes.theater) await checkTheater();
-            if (activeTypes.games) await checkGames();
-        } catch (e) {
-            log('CULTURE', `Erreur boucle principale: ${e.message}`, 'error');
-        }
-    }
-
-    // Vérifier la présence de captcha
-    function checkCaptcha() {
-        try {
-            const hasCaptcha = uw.$('.botcheck').length > 0 || uw.$('#recaptcha_window').length > 0;
-            
-            if (hasCaptcha && !captchaActive) {
-                captchaActive = true;
-                log('CULTURE', 'Captcha détecté, arrêt temporaire', 'warning');
-                if (intervalId) {
-                    clearInterval(intervalId);
-                    intervalId = null;
-                }
-            } else if (!hasCaptcha && captchaActive) {
-                captchaActive = false;
-                log('CULTURE', 'Captcha résolu, redémarrage', 'success');
-                if (isActive) {
-                    startInterval();
-                }
-            }
-        } catch (e) {
-            // Ignorer les erreurs de vérification captcha
-        }
-    }
-
-    // Démarrer l'intervalle avec un délai aléatoire
-    function startInterval() {
-        if (intervalId) {
-            clearInterval(intervalId);
-        }
-        
-        randomInterval = Math.floor(Math.random() * (50000 - 5000 + 1)) + 5000;
-        intervalId = setInterval(mainLoop, randomInterval);
-        
-        log('CULTURE', `Intervalle démarré: ${Math.round(randomInterval / 1000)}s`, 'info');
-    }
-
-    // Démarrer le module
-    function start() {
-        if (isActive) {
-            log('CULTURE', 'Déjà actif', 'warning');
-            return;
-        }
-
-        isActive = true;
-        saveConfig();
-        
-        // Démarrer l'intervalle
-        startInterval();
-        
-        // Démarrer la vérification du captcha
-        if (!captchaCheckInterval) {
-            captchaCheckInterval = setInterval(checkCaptcha, 300);
-        }
-        
-        log('CULTURE', 'Auto-culture démarré', 'success');
-        updateUI();
-        
-        if (window.GrepolisUltimate && window.GrepolisUltimate.updateButtonState) {
-            window.GrepolisUltimate.updateButtonState();
-        }
-    }
-
-    // Arrêter le module
-    function stop() {
-        if (!isActive) return;
-
-        isActive = false;
-        saveConfig();
-        
-        if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-        }
-        
-        if (captchaCheckInterval) {
-            clearInterval(captchaCheckInterval);
-            captchaCheckInterval = null;
-        }
-
-        log('CULTURE', 'Auto-culture arrêté', 'info');
-        updateUI();
-        
-        if (window.GrepolisUltimate && window.GrepolisUltimate.updateButtonState) {
-            window.GrepolisUltimate.updateButtonState();
-        }
-    }
-
-    // Basculer un type de célébration
-    function toggleType(type) {
-        activeTypes[type] = !activeTypes[type];
-        saveConfig();
-        log('CULTURE', `${type} ${activeTypes[type] ? 'activé' : 'désactivé'}`, 'info');
-        updateUI();
-    }
-
-    // Basculer le mode single/multiple
-    function toggleMode() {
-        singleMode = !singleMode;
-        saveConfig();
-        log('CULTURE', `Mode ${singleMode ? 'toutes les villes' : 'ville par ville'}`, 'info');
-        updateUI();
-    }
-
     // Réinitialiser les statistiques
     function resetStats() {
         stats = {
@@ -458,71 +496,6 @@
         saveConfig();
         updateStatsDisplay();
         log('CULTURE', 'Statistiques réinitialisées', 'info');
-    }
-
-    // Mettre à jour l'interface utilisateur
-    function updateUI() {
-        const statusEl = document.getElementById('culture-status');
-        if (statusEl) {
-            statusEl.textContent = isActive ? 'Actif' : 'Inactif';
-            statusEl.style.color = isActive ? '#81C784' : '#E57373';
-        }
-
-        const toggleInput = document.getElementById('culture-toggle');
-        if (toggleInput) {
-            toggleInput.checked = isActive;
-        }
-
-        const mainControl = document.querySelector('.main-control');
-        if (mainControl) {
-            if (isActive) {
-                mainControl.classList.remove('inactive');
-            } else {
-                mainControl.classList.add('inactive');
-            }
-        }
-
-        // Mettre à jour les boutons de type
-        const festivalBtn = document.getElementById('culture-festival');
-        const processionBtn = document.getElementById('culture-procession');
-        const theaterBtn = document.getElementById('culture-theater');
-        const gamesBtn = document.getElementById('culture-games');
-
-        if (festivalBtn) {
-            festivalBtn.className = activeTypes.festival ? 'btn btn-success' : 'btn';
-        }
-        if (processionBtn) {
-            processionBtn.className = activeTypes.procession ? 'btn btn-success' : 'btn';
-        }
-        if (theaterBtn) {
-            theaterBtn.className = activeTypes.theater ? 'btn btn-success' : 'btn';
-        }
-        if (gamesBtn) {
-            gamesBtn.className = activeTypes.games ? 'btn btn-success' : 'btn';
-        }
-
-        // Mettre à jour les boutons de mode
-        const singleBtn = document.getElementById('culture-single');
-        const multipleBtn = document.getElementById('culture-multiple');
-
-        if (singleBtn && multipleBtn) {
-            if (singleMode) {
-                singleBtn.className = 'btn btn-success';
-                multipleBtn.className = 'btn';
-            } else {
-                singleBtn.className = 'btn';
-                multipleBtn.className = 'btn btn-success';
-            }
-        }
-
-        // Afficher l'intervalle
-        const intervalEl = document.getElementById('culture-interval');
-        if (intervalEl) {
-            intervalEl.textContent = randomInterval > 0 ? `${Math.round(randomInterval / 1000)}s` : 'N/A';
-        }
-
-        updateStatsDisplay();
-        updateGoldDisplay();
     }
 
     // Mettre à jour l'affichage des statistiques
@@ -548,12 +521,185 @@
         }
     }
 
-    // Mettre à jour l'affichage de l'or
-    function updateGoldDisplay() {
+    // Mettre à jour l'affichage des ressources
+    function updateResourcesDisplay() {
         const goldEl = document.getElementById('culture-gold-display');
+        const bpEl = document.getElementById('culture-bp-display');
+        
         if (goldEl) {
             const gold = getGoldForPlayer();
-            goldEl.textContent = `${gold} 💰`;
+            goldEl.textContent = gold.toLocaleString();
+        }
+        
+        if (bpEl) {
+            const bp = getBattlePointsForPlayer();
+            bpEl.textContent = bp.toLocaleString();
+        }
+    }
+
+    // Mettre à jour la configuration des villes
+    function updateTownsConfig() {
+        const container = document.getElementById('culture-towns-config');
+        if (!container) return;
+        
+        const towns = getAllTowns();
+        if (towns.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: #8B8B83; padding: 20px;">Aucune ville trouvée</div>';
+            return;
+        }
+        
+        let html = '';
+        
+        for (let town of towns) {
+            const settings = getTownSettings(town.id);
+            const inProgress = getCelebrationInProgress(town.id);
+            
+            // Vérifier les bâtiments disponibles
+            const hasAcademy = getBuildingLevel(town.id, 'academy') >= 30;
+            const hasTheaterBuilding = getBuildingLevel(town.id, 'theater') >= 1;
+            
+            html += `
+                <div class="culture-town-card">
+                    <div class="culture-town-header">
+                        <span class="culture-town-name">${town.name}</span>
+                        ${inProgress ? '<span style="font-size: 10px; color: #FFB74D;">🎉 En cours</span>' : ''}
+                    </div>
+                    <div class="culture-celebrations-grid">
+                        ${renderCelebToggle(town.id, 'festival', '🎉', 'Festival', settings.festival, hasAcademy)}
+                        ${renderCelebToggle(town.id, 'procession', '🏆', 'Procession', settings.procession, true)}
+                        ${renderCelebToggle(town.id, 'theater', '🎭', 'Théâtre', settings.theater, hasTheaterBuilding)}
+                        ${renderCelebToggle(town.id, 'games', '🏟️', 'Jeux Olympiques', settings.games, hasAcademy)}
+                    </div>
+                </div>
+            `;
+        }
+        
+        container.innerHTML = html;
+        
+        // Attacher les événements aux checkboxes
+        container.querySelectorAll('.culture-celeb-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const townId = parseInt(this.dataset.townId);
+                const type = this.dataset.type;
+                setTownSetting(townId, type, this.checked);
+                
+                const toggle = this.closest('.culture-celeb-toggle');
+                if (this.checked) {
+                    toggle.classList.add('active');
+                } else {
+                    toggle.classList.remove('active');
+                }
+            });
+        });
+    }
+    
+    function renderCelebToggle(townId, type, icon, name, checked, available) {
+        const disabled = !available;
+        const activeClass = checked && available ? 'active' : '';
+        const disabledClass = disabled ? 'disabled' : '';
+        
+        return `
+            <div class="culture-celeb-toggle ${activeClass} ${disabledClass}">
+                <input type="checkbox" 
+                       class="culture-celeb-checkbox" 
+                       ${checked ? 'checked' : ''}
+                       ${disabled ? 'disabled' : ''}
+                       data-town-id="${townId}"
+                       data-type="${type}">
+                <span class="culture-celeb-icon">${icon}</span>
+                <span class="culture-celeb-name">${name}</span>
+            </div>
+        `;
+    }
+
+    // Sélectionner/désélectionner toutes les célébrations
+    function selectAllCelebrations(enable) {
+        const towns = getAllTowns();
+        
+        for (let town of towns) {
+            const townId = town.id;
+            
+            // Vérifier les bâtiments disponibles
+            const hasAcademy = getBuildingLevel(townId, 'academy') >= 30;
+            const hasTheaterBuilding = getBuildingLevel(townId, 'theater') >= 1;
+            
+            // Festival et Jeux Olympiques nécessitent Académie 30+
+            if (hasAcademy) {
+                setTownSetting(townId, 'festival', enable);
+                setTownSetting(townId, 'games', enable);
+            }
+            
+            // Procession toujours disponible
+            setTownSetting(townId, 'procession', enable);
+            
+            // Théâtre nécessite le bâtiment
+            if (hasTheaterBuilding) {
+                setTownSetting(townId, 'theater', enable);
+            }
+        }
+        
+        updateTownsConfig();
+        log('CULTURE', enable ? 'Toutes les célébrations activées' : 'Toutes les célébrations désactivées', 'info');
+    }
+
+    // Attacher les événements
+    function attachEvents() {
+        const toggleInput = document.getElementById('culture-toggle');
+        if (toggleInput) {
+            toggleInput.addEventListener('change', function() {
+                if (this.checked) {
+                    start();
+                } else {
+                    stop();
+                }
+            });
+        }
+
+        const selectAllBtn = document.getElementById('culture-select-all');
+        const deselectAllBtn = document.getElementById('culture-deselect-all');
+        
+        if (selectAllBtn) {
+            selectAllBtn.addEventListener('click', () => selectAllCelebrations(true));
+        }
+        if (deselectAllBtn) {
+            deselectAllBtn.addEventListener('click', () => selectAllCelebrations(false));
+        }
+
+        const resetBtn = document.getElementById('reset-stats-btn');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', resetStats);
+        }
+
+        document.querySelectorAll('.section-header').forEach(header => {
+            header.addEventListener('click', function() {
+                this.classList.toggle('collapsed');
+            });
+        });
+        
+        // Mettre à jour l'affichage des ressources toutes les 10 secondes
+        setInterval(updateResourcesDisplay, 10000);
+        updateResourcesDisplay();
+    }
+
+    // Sauvegarder la configuration
+    function saveConfig() {
+        GM_setValue('culture_active', isActive);
+        GM_setValue('culture_town_settings', townSettings);
+        GM_setValue('culture_stats', JSON.stringify(stats));
+    }
+
+    // Charger la configuration
+    function loadConfig() {
+        isActive = GM_getValue('culture_active', false);
+        townSettings = GM_getValue('culture_town_settings', {});
+        
+        const savedStats = GM_getValue('culture_stats', null);
+        if (savedStats) {
+            try {
+                stats = JSON.parse(savedStats);
+            } catch (e) {
+                // Ignorer les erreurs
+            }
         }
     }
 
@@ -573,69 +719,42 @@
 
             <div class="bot-section">
                 <div class="section-header">
-                    <div class="section-title">🎭 Types de Célébrations</div>
+                    <div class="section-title">🏛️ Configuration par Ville</div>
                     <div class="section-toggle">▼</div>
                 </div>
                 <div class="section-content">
-                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px;">
-                        <button class="btn ${activeTypes.festival ? 'btn-success' : ''}" id="culture-festival">
-                            🎉 Festival
-                        </button>
-                        <button class="btn ${activeTypes.procession ? 'btn-success' : ''}" id="culture-procession">
-                            🏆 Procession
-                        </button>
-                        <button class="btn ${activeTypes.theater ? 'btn-success' : ''}" id="culture-theater">
-                            🎭 Théâtre
-                        </button>
-                        <button class="btn ${activeTypes.games ? 'btn-success' : ''}" id="culture-games">
-                            🏟️ Jeux Olympiques
-                        </button>
+                    <div style="margin-bottom: 15px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 11px; color: #BDB76B;">
+                        <strong>ℹ️ Instructions:</strong><br>
+                        Activez les célébrations que vous souhaitez lancer automatiquement pour chaque ville.<br>
+                        Le bot vérifie toutes les 5-50 secondes et lance les célébrations disponibles.
                     </div>
-
-                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 11px; color: #BDB76B;">
-                        <strong>📋 Coûts:</strong><br>
-                        • Festival: 15k bois, 18k pierre, 15k fer (Académie 30+)<br>
-                        • Procession: 300 points de conquête<br>
-                        • Théâtre: 10k bois, 12k pierre, 10k fer (Théâtre requis)<br>
-                        • Jeux Olympiques: 50 or (Académie 30+)
+                    
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(212,175,55,0.2);">
+                        <button class="btn btn-success" style="flex: 1; font-size: 11px;" id="culture-select-all">✅ Tout Activer</button>
+                        <button class="btn btn-danger" style="flex: 1; font-size: 11px;" id="culture-deselect-all">❌ Tout Désactiver</button>
                     </div>
-
-                    <div style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; text-align: center;">
-                        <div style="font-size: 11px; color: #BDB76B; margin-bottom: 5px;">OR DISPONIBLE</div>
-                        <div style="font-size: 20px; color: #FFD700; font-weight: bold;" id="culture-gold-display">
-                            0 💰
-                        </div>
-                    </div>
+                    
+                    <div id="culture-towns-config" style="max-height: 500px; overflow-y: auto;"></div>
                 </div>
             </div>
 
             <div class="bot-section">
                 <div class="section-header">
-                    <div class="section-title">⚙️ Mode de Lancement</div>
+                    <div class="section-title">💰 Ressources Disponibles</div>
                     <div class="section-toggle">▼</div>
                 </div>
                 <div class="section-content">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
-                        <button class="btn ${singleMode ? 'btn-success' : ''}" id="culture-single">
-                            🏘️ Toutes les Villes
-                        </button>
-                        <button class="btn ${!singleMode ? 'btn-success' : ''}" id="culture-multiple">
-                            🏛️ Ville par Ville
-                        </button>
-                    </div>
-
-                    <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 11px; color: #BDB76B; font-style: italic;">
-                        ${singleMode ? 
-                            '✓ Lance les célébrations dans toutes les villes éligibles automatiquement' : 
-                            '✓ Lance une seule célébration à la fois'}
-                    </div>
-
-                    <div style="margin-top: 15px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; text-align: center;">
-                        <div style="font-size: 11px; color: #BDB76B; margin-bottom: 5px;">INTERVALLE ALÉATOIRE</div>
-                        <div style="font-size: 18px; color: #FFD700; font-weight: bold;" id="culture-interval">
-                            ${randomInterval > 0 ? Math.round(randomInterval / 1000) + 's' : 'N/A'}
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                        <div style="text-align: center; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                            <div style="font-size: 16px; margin-bottom: 4px;">💰</div>
+                            <div style="font-size: 18px; color: #FFD700; font-weight: bold;" id="culture-gold-display">0</div>
+                            <div style="font-size: 10px; color: #8B8B83; margin-top: 2px;">Or</div>
                         </div>
-                        <div style="font-size: 10px; color: #8B8B83; margin-top: 3px;">Entre 5s et 50s</div>
+                        <div style="text-align: center; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                            <div style="font-size: 16px; margin-bottom: 4px;">⚔️</div>
+                            <div style="font-size: 18px; color: #FFD700; font-weight: bold;" id="culture-bp-display">0</div>
+                            <div style="font-size: 10px; color: #8B8B83; margin-top: 2px;">Points Combat</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -683,111 +802,113 @@
                 </div>
                 <div class="section-content">
                     <div style="font-size: 12px; color: #F5DEB3; line-height: 1.6;">
+                        <strong>📋 Coûts des célébrations:</strong><br>
+                        • Festival: 15k bois, 18k pierre, 15k fer (Académie 30+)<br>
+                        • Procession: 300 points de combat<br>
+                        • Théâtre: 10k bois, 12k pierre, 10k fer (Théâtre requis)<br>
+                        • Jeux Olympiques: 50 or (Académie 30+)<br><br>
                         <strong>🛡️ Protection Anti-Captcha:</strong><br>
                         Le bot s'arrête automatiquement si un captcha est détecté et reprend une fois résolu.<br><br>
                         <strong>⏱️ Intervalle Aléatoire:</strong><br>
-                        Pour éviter la détection, l'intervalle entre chaque vérification varie entre 5 et 50 secondes.<br><br>
-                        <strong>✅ Conditions de Lancement:</strong><br>
-                        Les célébrations ne sont lancées que si les ressources et bâtiments nécessaires sont disponibles.
+                        Pour éviter la détection, l'intervalle entre chaque vérification varie entre 5 et 50 secondes.
                     </div>
                 </div>
             </div>
+
+            <style>
+                .culture-town-card {
+                    background: rgba(0,0,0,0.25);
+                    border: 1px solid rgba(212,175,55,0.3);
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-bottom: 10px;
+                }
+                .culture-town-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 10px;
+                    padding-bottom: 8px;
+                    border-bottom: 1px solid rgba(212,175,55,0.2);
+                }
+                .culture-town-name {
+                    font-family: 'Cinzel', serif;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #F5DEB3;
+                }
+                .culture-celebrations-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 8px;
+                }
+                .culture-celeb-toggle {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 8px 10px;
+                    background: rgba(0,0,0,0.2);
+                    border: 1px solid rgba(212,175,55,0.2);
+                    border-radius: 6px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                .culture-celeb-toggle:hover:not(.disabled) {
+                    border-color: rgba(212,175,55,0.5);
+                    background: rgba(0,0,0,0.3);
+                }
+                .culture-celeb-toggle.active {
+                    border-color: rgba(76,175,80,0.6);
+                    background: rgba(76,175,80,0.15);
+                }
+                .culture-celeb-toggle.disabled {
+                    opacity: 0.4;
+                    cursor: not-allowed;
+                }
+                .culture-celeb-checkbox {
+                    width: 18px;
+                    height: 18px;
+                    accent-color: #4CAF50;
+                }
+                .culture-celeb-icon {
+                    font-size: 16px;
+                }
+                .culture-celeb-name {
+                    font-size: 11px;
+                    color: #F5DEB3;
+                    flex: 1;
+                }
+            </style>
         `;
 
-        // Attacher les événements
         attachEvents();
+        updateTownsConfig();
     };
 
-    // Attacher les événements aux éléments
-    function attachEvents() {
-        // Toggle principal
-        const toggleInput = document.getElementById('culture-toggle');
-        if (toggleInput) {
-            toggleInput.addEventListener('change', function() {
-                if (this.checked) {
-                    start();
-                } else {
-                    stop();
-                }
-            });
-        }
-
-        // Boutons de type
-        const festivalBtn = document.getElementById('culture-festival');
-        const processionBtn = document.getElementById('culture-procession');
-        const theaterBtn = document.getElementById('culture-theater');
-        const gamesBtn = document.getElementById('culture-games');
-
-        if (festivalBtn) {
-            festivalBtn.addEventListener('click', () => toggleType('festival'));
-        }
-        if (processionBtn) {
-            processionBtn.addEventListener('click', () => toggleType('procession'));
-        }
-        if (theaterBtn) {
-            theaterBtn.addEventListener('click', () => toggleType('theater'));
-        }
-        if (gamesBtn) {
-            gamesBtn.addEventListener('click', () => toggleType('games'));
-        }
-
-        // Boutons de mode
-        const singleBtn = document.getElementById('culture-single');
-        const multipleBtn = document.getElementById('culture-multiple');
-
-        if (singleBtn) {
-            singleBtn.addEventListener('click', toggleMode);
-        }
-        if (multipleBtn) {
-            multipleBtn.addEventListener('click', toggleMode);
-        }
-
-        // Bouton reset stats
-        const resetBtn = document.getElementById('reset-stats-btn');
-        if (resetBtn) {
-            resetBtn.addEventListener('click', resetStats);
-        }
-
-        // Sections pliables
-        document.querySelectorAll('.section-header').forEach(header => {
-            header.addEventListener('click', function() {
-                this.classList.toggle('collapsed');
-            });
-        });
-        
-        // Mettre à jour l'affichage de l'or toutes les 5 secondes
-        setInterval(updateGoldDisplay, 5000);
-        updateGoldDisplay();
-    }
-
-    // Initialisation du module
+    // Initialiser le module
     module.init = function() {
         loadConfig();
         
-        // Redémarrer si c'était actif
         if (isActive) {
-            isActive = false; // Reset pour permettre le redémarrage
             start();
         }
+        
+        updateStatsDisplay();
+        updateResourcesDisplay();
         
         log('CULTURE', 'Module initialisé', 'info');
     };
 
-    // Fonction pour vérifier si le module est actif
+    // Vérifier si le module est actif
     module.isActive = function() {
         return isActive;
     };
 
-    // Appelé quand l'onglet est activé
+    // Callback quand l'onglet est activé
     module.onActivate = function(container) {
-        updateUI();
+        updateTownsConfig();
+        updateStatsDisplay();
+        updateResourcesDisplay();
     };
-
-    // Export des fonctions pour debug
-    module.start = start;
-    module.stop = stop;
-    module.toggleType = toggleType;
-    module.toggleMode = toggleMode;
-    module.resetStats = resetStats;
 
 })(module);
