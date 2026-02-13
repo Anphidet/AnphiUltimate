@@ -197,25 +197,25 @@ function toggleFarm(enabled) {
 async function runFarmCycle() {
     if (!farmData.enabled) return;
     
-    // Obtenir le temps avant la prochaine récolte disponible
     const nextTime = getNextAvailableCollection();
     
     if (nextTime > 0) {
-        // Il faut attendre avant la prochaine récolte
+        // Aucune île prête, attendre la prochaine
         farmData.nextCheckTime = Date.now() + nextTime + 3000;
         farmData.interval = setTimeout(() => runFarmCycle(), nextTime + 3000);
         updateIslandsStatus();
     } else {
-        // Au moins une île est prête
+        // Au moins une île prête → récolter
         await executeFarmClaim();
         
-        // Vérifier s'il reste des îles à récolter
+        // Attendre 5s minimum pour laisser le jeu mettre à jour les cooldowns
+        await new Promise(r => setTimeout(r, 5000));
+        
         const nextAvailable = getNextAvailableCollection();
         if (nextAvailable === 0) {
-            // Il y a encore des îles prêtes, réessayer rapidement
-            farmData.interval = setTimeout(() => runFarmCycle(), 2000);
+            // Il reste encore des îles prêtes (plusieurs avec des timers différents)
+            farmData.interval = setTimeout(() => runFarmCycle(), 3000);
         } else {
-            // Programmer le prochain cycle
             farmData.nextCheckTime = Date.now() + nextAvailable + 3000;
             farmData.interval = setTimeout(() => runFarmCycle(), nextAvailable + 3000);
         }
@@ -226,106 +226,127 @@ async function runFarmCycle() {
 
 async function executeFarmClaim() {
     try {
-        const islandsInfo = getIslandsWithStatus();
-        const readyIslands = islandsInfo.filter(island => island.isReady && !island.isEmpty);
+        const islands = getIslandsWithStatus();
+        const readyIslands = islands.filter(i => i.isReady);
         
         if (readyIslands.length === 0) {
             // Ne logger qu'une fois toutes les 60 secondes pour éviter le spam
             const now = Date.now();
             if (!farmData.lastNoIslandLog || now - farmData.lastNoIslandLog > 60000) {
                 const nextAvailable = getNextAvailableCollection();
-                const mins = Math.floor(nextAvailable / 60000);
-                const secs = Math.floor((nextAvailable % 60000) / 1000);
-                log('FARM', `Aucune île prête. Prochaine dans ${mins}m ${secs}s`, 'info');
+                if (nextAvailable > 0) {
+                    const mins = Math.floor(nextAvailable / 60000);
+                    const secs = Math.floor((nextAvailable % 60000) / 1000);
+                    log('FARM', `Aucune île prête. Prochaine dans ${mins}m ${secs}s`, 'info');
+                }
                 farmData.lastNoIslandLog = now;
             }
             return;
         }
         
-        let list = readyIslands.map(island => island.town);
+        let list = readyIslands;
         
         if (farmData.settings.mode === 'round_robin') {
             const offset = farmData.cycleCount % list.length;
-            list = list.concat(list.splice(0, offset));
+            list = list.slice(offset).concat(list.slice(0, offset));
             farmData.cycleCount++;
         }
         
-        const ids = list.map(p => p.id);
-        const skippedCount = islandsInfo.filter(i => i.isReady && i.isEmpty).length;
+        const ids = list.map(i => i.id);
         
-        log('FARM', `Récolte de ${ids.length} île(s)${skippedCount > 0 ? ` (${skippedCount} ignorée(s))` : ''}...`, 'info');
+        log('FARM', `Récolte: ${ids.length} île(s), ${list.reduce((a, i) => a + i.readyCount, 0)} village(s) prêt(s)`, 'info');
         
         await new Promise(r => uw.gpAjax.ajaxGet('farm_town_overviews', 'index', {}, false, () => r()));
         await new Promise(r => setTimeout(r, 1000));
         
         uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', {
             towns: ids,
-            time_option_base: farmData.settings.duration === 1 ? 300 : 1200,
-            time_option_booty: farmData.settings.duration === 1 ? 600 : 2400,
+            time_option_base:  farmData.settings.duration === 1 ? 300  : 1200,
+            time_option_booty: farmData.settings.duration === 1 ? 600  : 2400,
             claim_factor: 'normal'
         }, false, () => {
             const gain = ids.length * (farmData.settings.duration === 1 ? 115 : 350);
             farmData.stats.cycles++;
             farmData.stats.totalRes += gain;
-            farmData.stats.skippedIslands += skippedCount;
             
             log('FARM', `✅ ${ids.length} île(s) récoltée(s), +${gain} res`, 'success');
             updateStats();
             saveData();
             
-            sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${gain.toLocaleString()} ressources\n${skippedCount > 0 ? `Îles ignorées: ${skippedCount}` : ''}`);
+            sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${gain.toLocaleString()} ressources`);
         });
     } catch(e) {
         log('FARM', 'Erreur: ' + e.message, 'error');
     }
 }
 
-// Obtenir la liste des îles avec leur statut
+// Obtenir la liste des îles avec leur statut - logique correcte basée sur ModernBot
 function getIslandsWithStatus() {
-    const towns = uw.MM.getOnlyCollectionByName('Town').models;
-    const islandMap = new Map();
-    const relations = uw.MM.getCollections()?.FarmTownPlayerRelation?.[0]?.models || [];
     const now = Math.floor(Date.now() / 1000);
-    
-    // Créer une map des temps de loot par île (basé sur island_x et island_y)
-    const islandLootTimes = new Map();
-    
-    for (const rel of relations) {
-        if (!rel.attributes) continue;
-        
-        const farmTownId = rel.attributes.farm_town_id;
-        const lootableAt = rel.attributes.lootable_at || 0;
-        const relationStatus = rel.attributes.relation_status;
-        
-        // Ignorer les villages de farm non conquis (relation_status !== 1)
-        if (relationStatus !== 1) continue;
-        
-        // Trouver la ville de farm correspondante pour obtenir ses coordonnées
-        try {
-            const farmTowns = uw.MM.getOnlyCollectionByName('FarmTown').models;
-            const farmTown = farmTowns.find(ft => ft.id === farmTownId);
-            
-            if (farmTown && farmTown.attributes) {
-                const islandKey = `${farmTown.attributes.island_x}_${farmTown.attributes.island_y}`;
-                
-                if (!islandLootTimes.has(islandKey)) {
-                    islandLootTimes.set(islandKey, []);
-                }
-                islandLootTimes.get(islandKey).push(lootableAt);
+    const islandMap = new Map(); // clé = islandId
+
+    // Récupérer les modèles nécessaires
+    let playerTowns, farmTownModels, relationModels;
+    try {
+        playerTowns    = uw.MM.getOnlyCollectionByName('Town').models;
+        farmTownModels = uw.MM.getOnlyCollectionByName('FarmTown').models;
+        relationModels = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation').models;
+    } catch (e) {
+        return [];
+    }
+
+    // Pré-indexer les FarmTown par id pour éviter une boucle imbriquée dans la boucle
+    const farmTownById = new Map();
+    for (const ft of farmTownModels) {
+        farmTownById.set(ft.id, ft.attributes);
+    }
+
+    // Pour chaque relation conquise, ranger par islandKey (x_y)
+    // Un village de farm est "disponible" si :
+    //   - relation_status === 1  (village conquis)
+    //   - lootable_at est null OU lootable_at <= now  (cooldown écoulé ou jamais récolté)
+    const islandFarmStatus = new Map(); // islandKey -> { readyCount, totalCount, minNextTime }
+
+    for (const rel of relationModels) {
+        const ra = rel.attributes;
+        if (!ra) continue;
+        if (ra.relation_status !== 1) continue; // pas conquis → ignorer
+
+        const ft = farmTownById.get(ra.farm_town_id);
+        if (!ft) continue;
+
+        const islandKey = `${ft.island_x}_${ft.island_y}`;
+
+        if (!islandFarmStatus.has(islandKey)) {
+            islandFarmStatus.set(islandKey, { readyCount: 0, totalCount: 0, minNextTime: Infinity });
+        }
+        const status = islandFarmStatus.get(islandKey);
+        status.totalCount++;
+
+        const lootableAt = ra.lootable_at; // null = jamais récolté, number = timestamp cooldown
+
+        if (lootableAt === null || lootableAt <= now) {
+            // Ce village est PRÊT (cooldown terminé ou pas encore récolté)
+            status.readyCount++;
+        } else {
+            // Ce village est en cooldown — retenir le prochain dispo
+            if (lootableAt < status.minNextTime) {
+                status.minNextTime = lootableAt;
             }
-        } catch (e) {
-            // Ignorer les erreurs
         }
     }
-    
-    for (const t of towns) {
-        if (t.attributes.on_small_island) continue;
-        
-        const townId = t.attributes.id;
-        const res = t.attributes.resources;
+
+    // Construire la liste à partir des villes du joueur
+    for (const t of playerTowns) {
+        const ta = t.attributes;
+        if (ta.on_small_island) continue;
+
+        const townId  = ta.id;
+        const islandId = ta.island_id;
+        const res     = ta.resources || {};
         const totalRes = (res.wood || 0) + (res.stone || 0) + (res.iron || 0);
-        
-        // Obtenir les coordonnées de l'île de cette ville
+
+        // Récupérer les coordonnées de l'île
         let islandX, islandY;
         try {
             const town = uw.ITowns.getTown(townId);
@@ -334,44 +355,36 @@ function getIslandsWithStatus() {
         } catch (e) {
             continue;
         }
-        
+
         const islandKey = `${islandX}_${islandY}`;
-        const islandId = t.attributes.island_id;
-        
-        // Obtenir les temps de loot pour cette île
-        const lootTimes = islandLootTimes.get(islandKey) || [];
-        
-        if (lootTimes.length === 0) {
-            // Pas de villages de farm sur cette île
-            continue;
-        }
-        
-        // Trouver le temps minimum (premier village disponible)
-        const minLootTime = Math.min(...lootTimes);
-        const maxLootTime = Math.max(...lootTimes);
-        
-        // Vérifier si au moins un village est prêt
-        const isReady = minLootTime <= now;
-        
-        // Vérifier si TOUS les villages sont en cooldown
-        const allOnCooldown = lootTimes.every(time => time > now);
-        const isEmpty = farmData.settings.skipEmptyIslands && allOnCooldown;
-        
-        const townData = { 
-            id: townId, 
-            name: t.attributes.name, 
-            total: totalRes, 
+        const farmStatus = islandFarmStatus.get(islandKey);
+
+        // Ignorer les îles sans village de farm conquis
+        if (!farmStatus || farmStatus.totalCount === 0) continue;
+
+        const isReady    = farmStatus.readyCount > 0;
+        // Vide = aucun village prêt (tous en cooldown)
+        const isEmpty    = !isReady;
+        // Temps en ms avant le premier village disponible (0 si déjà prêt)
+        const nextAvailableMs = isReady
+            ? 0
+            : (farmStatus.minNextTime === Infinity ? 0 : Math.max(0, (farmStatus.minNextTime - now) * 1000));
+
+        const townData = {
+            id:         townId,
+            name:       ta.name,
+            total:      totalRes,
             islandId,
             islandX,
             islandY,
-            minLootTime,
-            maxLootTime,
             isReady,
             isEmpty,
-            farmCount: lootTimes.length
+            readyCount:  farmStatus.readyCount,
+            totalFarms:  farmStatus.totalCount,
+            nextAvailableMs
         };
-        
-        // Sélectionner la ville avec le moins de ressources par île
+
+        // Garder une seule ville par île (la moins remplie en mode least_resources)
         if (islandMap.has(islandId)) {
             const existing = islandMap.get(islandId);
             if (farmData.settings.mode === 'least_resources' && townData.total < existing.total) {
@@ -381,87 +394,74 @@ function getIslandsWithStatus() {
             islandMap.set(islandId, townData);
         }
     }
-    
-    return Array.from(islandMap.values()).map(town => ({
-        town,
-        isReady: town.isReady,
-        isEmpty: town.isEmpty,
-        nextAvailable: Math.max(0, (town.minLootTime - now) * 1000),
-        farmCount: town.farmCount
-    }));
+
+    return Array.from(islandMap.values());
 }
 
-// Obtenir le temps avant la prochaine récolte disponible
+// Obtenir le temps en ms avant la prochaine récolte possible (0 = disponible maintenant)
 function getNextAvailableCollection() {
-    const islandsInfo = getIslandsWithStatus();
-    
-    // Filtrer les îles non vides si l'option est activée
-    let validIslands = islandsInfo;
-    if (farmData.settings.skipEmptyIslands) {
-        validIslands = islandsInfo.filter(island => !island.isEmpty);
-    }
-    
-    if (validIslands.length === 0) {
-        // Si aucune île valide, attendre la plus proche
-        const allTimes = islandsInfo.map(i => i.nextAvailable);
-        return allTimes.length > 0 ? Math.min(...allTimes) : 60000;
-    }
-    
-    // Trouver le temps minimum parmi les îles valides
-    const minTime = Math.min(...validIslands.map(island => island.nextAvailable));
-    return minTime;
+    const islands = getIslandsWithStatus();
+
+    // Îles avec au moins un village prêt
+    const readyIslands = islands.filter(i => i.isReady);
+    if (readyIslands.length > 0) return 0;
+
+    // Aucune île prête : trouver la prochaine
+    const times = islands
+        .filter(i => i.nextAvailableMs > 0)
+        .map(i => i.nextAvailableMs);
+
+    if (times.length === 0) return 60000; // fallback 1 minute
+    return Math.min(...times);
 }
 
 // Obtenir le nombre d'îles prêtes
 function getReadyIslandsCount() {
-    const islandsInfo = getIslandsWithStatus();
-    return islandsInfo.filter(island => island.isReady && !island.isEmpty).length;
+    return getIslandsWithStatus().filter(i => i.isReady).length;
 }
 
 function updateIslandsStatus() {
     const container = document.getElementById('farm-islands-status');
     if (!container) return;
     
-    const islandsInfo = getIslandsWithStatus();
-    const now = Date.now();
+    const islands = getIslandsWithStatus();
     
-    if (islandsInfo.length === 0) {
+    if (islands.length === 0) {
         container.innerHTML = '<div style="text-align: center; color: #8B8B83; padding: 15px;">Aucune île trouvée</div>';
         return;
     }
     
-    // Trier par temps restant
-    islandsInfo.sort((a, b) => a.nextAvailable - b.nextAvailable);
+    // Trier : prêtes d'abord, puis par temps restant
+    islands.sort((a, b) => {
+        if (a.isReady && !b.isReady) return -1;
+        if (!a.isReady && b.isReady) return 1;
+        return a.nextAvailableMs - b.nextAvailableMs;
+    });
     
     let html = '';
-    for (const info of islandsInfo) {
-        const timeLeft = info.nextAvailable;
-        const isReady = timeLeft === 0;
-        const isEmpty = info.isEmpty;
+    for (const island of islands) {
+        let statusText, statusColor;
         
-        let statusText = '';
-        let statusColor = '';
-        
-        if (isEmpty) {
-            statusText = '🚫 Aucune ressource';
-            statusColor = '#E57373';
-        } else if (isReady) {
-            statusText = '✅ Prête';
+        if (island.isReady) {
+            statusText = `✅ Prête (${island.readyCount}/${island.totalFarms})`;
             statusColor = '#81C784';
         } else {
-            const mins = Math.floor(timeLeft / 60000);
-            const secs = Math.floor((timeLeft % 60000) / 1000);
-            statusText = `⏱️ ${mins}:${secs.toString().padStart(2, '0')}`;
+            const ms   = island.nextAvailableMs;
+            const mins = Math.floor(ms / 60000);
+            const secs = Math.floor((ms % 60000) / 1000);
+            statusText = `⏱️ ${mins}:${secs.toString().padStart(2, '0')} (0/${island.totalFarms})`;
             statusColor = '#FFB74D';
         }
         
         html += `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; margin-bottom: 4px; background: rgba(0,0,0,0.2); border-radius: 4px; border-left: 3px solid ${statusColor};">
+            <div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:8px 12px;margin-bottom:4px;background:rgba(0,0,0,0.2);
+                        border-radius:4px;border-left:3px solid ${statusColor};">
                 <div>
-                    <div style="color: #F5DEB3; font-weight: 600;">${info.town.name}</div>
-                    <div style="color: #8B8B83; font-size: 10px;">${info.farmCount} village(s) de farm</div>
+                    <div style="color:#F5DEB3;font-weight:600;">${island.name}</div>
+                    <div style="color:#8B8B83;font-size:10px;">${island.totalFarms} village(s) de farm</div>
                 </div>
-                <div style="color: ${statusColor}; font-weight: 600; text-align: right;">
+                <div style="color:${statusColor};font-weight:600;text-align:right;font-size:11px;">
                     ${statusText}
                 </div>
             </div>
@@ -474,32 +474,35 @@ function updateIslandsStatus() {
 function startTimer() {
     setInterval(() => {
         const farmTimer = document.getElementById('farm-timer');
-        const islandsReady = document.getElementById('farm-islands-ready');
+        const islandsReadyEl = document.getElementById('farm-islands-ready');
         
         if (!farmTimer) return;
         
         if (!farmData.enabled) {
             farmTimer.textContent = '--:--';
             farmTimer.classList.remove('ready');
-            if (islandsReady) islandsReady.textContent = '0';
+            if (islandsReadyEl) islandsReadyEl.textContent = '0';
             return;
         }
         
-        const diff = Math.max(0, farmData.nextCheckTime - Date.now());
         const readyCount = getReadyIslandsCount();
         
-        if (islandsReady) {
-            islandsReady.textContent = readyCount;
-        }
+        if (islandsReadyEl) islandsReadyEl.textContent = readyCount;
         
-        if (diff <= 0 || readyCount > 0) {
+        if (readyCount > 0) {
             farmTimer.textContent = 'PRÊT';
             farmTimer.classList.add('ready');
         } else {
             farmTimer.classList.remove('ready');
-            const mins = Math.floor(diff / 60000).toString().padStart(2, '0');
-            const secs = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-            farmTimer.textContent = `${mins}:${secs}`;
+            // Afficher le temps avant la prochaine île
+            const nextMs = getNextAvailableCollection();
+            if (nextMs > 0) {
+                const mins = Math.floor(nextMs / 60000).toString().padStart(2, '0');
+                const secs = Math.floor((nextMs % 60000) / 1000).toString().padStart(2, '0');
+                farmTimer.textContent = `${mins}:${secs}`;
+            } else {
+                farmTimer.textContent = '--:--';
+            }
         }
         
         // Mettre à jour l'état des îles toutes les 5 secondes
@@ -516,7 +519,7 @@ function updateStats() {
     
     if (c) c.textContent = farmData.stats.cycles;
     if (r) r.textContent = farmData.stats.totalRes.toLocaleString();
-    if (s) s.textContent = farmData.stats.skippedIslands;
+    if (s) s.textContent = farmData.stats.skippedIslands || 0;
 }
 
 function sendWebhook(title, desc) {
