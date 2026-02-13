@@ -12,7 +12,7 @@
         {
             "name": "mipose",
             "playerId": 0,
-            "servers": ["*"],
+            "servers": ["180"],
             "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
@@ -35,31 +35,46 @@
             "playerId": 0,
             "servers": ["*"],
             "modules": ["*"],
-            "comment": "Dodoagrrr 179"
+            "comment": "all"
         },
         {
             "name": "EnZoLegEnDEs",
             "playerId": 0,
             "servers": ["*"],
             "modules": ["*"],
-            "comment": "Dodoagrrr 179"
+            "comment": "all"
         },
         {
             "name": "dark vador du 35",
             "playerId": 0,
             "servers": ["*"],
             "modules": ["*"],
-            "comment": "Dodoagrrr 179"
+            "comment": "ALL"
+        },
+        {
+            "name": "PantRose",
+            "playerId": 0,
+            "servers": ["180"],
+            "modules": ["*"],
+            "comment": "Pant Olympus"
+        },
+        {
+            "name": "XxBesixx",
+            "playerId": 0,
+            "servers": ["180"],
+            "modules": ["*"],
+            "comment": "Besix olympus"
         },
         {
             "name": "zankyx",
             "playerId": 0,
             "servers": ["*"],
             "modules": ["*"],
-            "comment": "Dodoagrrr 179"
+            "comment": "ALL"
         }
     ]
 }
+
 
 
 
