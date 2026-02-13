@@ -196,9 +196,9 @@ function toggleFarm(enabled) {
 
 async function runFarmCycle() {
     if (!farmData.enabled) return;
-    
+
     const nextTime = getNextAvailableCollection();
-    
+
     if (nextTime > 0) {
         // Aucune île prête, attendre la prochaine
         farmData.nextCheckTime = Date.now() + nextTime + 3000;
@@ -207,21 +207,42 @@ async function runFarmCycle() {
     } else {
         // Au moins une île prête → récolter
         await executeFarmClaim();
-        
-        // Attendre 5s minimum pour laisser le jeu mettre à jour les cooldowns
-        await new Promise(r => setTimeout(r, 5000));
-        
+
+        // Recharger les modèles FarmTownPlayerRelation depuis le serveur
+        // OBLIGATOIRE : après claim, lootable_at en mémoire n'est pas encore mis à jour
+        // Sans ça, getNextAvailableCollection() retourne 0 en boucle infinie
+        await refreshFarmRelations();
+
         const nextAvailable = getNextAvailableCollection();
         if (nextAvailable === 0) {
-            // Il reste encore des îles prêtes (plusieurs avec des timers différents)
-            farmData.interval = setTimeout(() => runFarmCycle(), 3000);
+            // Fallback de sécurité : si toujours 0 après refresh, attendre 60s
+            log('FARM', 'Cooldowns non reçus du serveur, attente 60s', 'warning');
+            farmData.nextCheckTime = Date.now() + 60000;
+            farmData.interval = setTimeout(() => runFarmCycle(), 60000);
         } else {
             farmData.nextCheckTime = Date.now() + nextAvailable + 3000;
             farmData.interval = setTimeout(() => runFarmCycle(), nextAvailable + 3000);
         }
-        
+
         updateIslandsStatus();
     }
+}
+
+// Forcer le rechargement des relations farm depuis le serveur
+// Grepolis met à jour lootable_at uniquement après un appel réseau
+async function refreshFarmRelations() {
+    return new Promise(resolve => {
+        try {
+            uw.gpAjax.ajaxGet('farm_town_overviews', 'index', {}, false, () => {
+                // Petite pause pour laisser MM mettre à jour ses modèles en mémoire
+                setTimeout(resolve, 1500);
+            }, () => {
+                setTimeout(resolve, 1500);
+            });
+        } catch(e) {
+            setTimeout(resolve, 1500);
+        }
+    });
 }
 
 async function executeFarmClaim() {
@@ -254,26 +275,27 @@ async function executeFarmClaim() {
         
         const ids = list.map(i => i.id);
         
-        log('FARM', `Récolte: ${ids.length} île(s), ${list.reduce((a, i) => a + i.readyCount, 0)} village(s) prêt(s)`, 'info');
-        
-        await new Promise(r => uw.gpAjax.ajaxGet('farm_town_overviews', 'index', {}, false, () => r()));
-        await new Promise(r => setTimeout(r, 1000));
-        
-        uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', {
-            towns: ids,
-            time_option_base:  farmData.settings.duration === 1 ? 300  : 1200,
-            time_option_booty: farmData.settings.duration === 1 ? 600  : 2400,
-            claim_factor: 'normal'
-        }, false, () => {
-            const gain = ids.length * (farmData.settings.duration === 1 ? 115 : 350);
-            farmData.stats.cycles++;
-            farmData.stats.totalRes += gain;
-            
-            log('FARM', `✅ ${ids.length} île(s) récoltée(s), +${gain} res`, 'success');
-            updateStats();
-            saveData();
-            
-            sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${gain.toLocaleString()} ressources`);
+        const totalVillages = list.reduce((a, i) => a + i.readyCount, 0);
+        log('FARM', `Récolte: ${ids.length} île(s), ${totalVillages} village(s) prêt(s)`, 'info');
+
+        // Await le claim pour être sûr que le serveur a bien traité la requête
+        // avant que refreshFarmRelations ne récupère les nouveaux cooldowns
+        await new Promise((resolve) => {
+            uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', {
+                towns: ids,
+                time_option_base:  farmData.settings.duration === 1 ? 300  : 1200,
+                time_option_booty: farmData.settings.duration === 1 ? 600  : 2400,
+                claim_factor: 'normal'
+            }, false, () => {
+                const gain = ids.length * (farmData.settings.duration === 1 ? 115 : 350);
+                farmData.stats.cycles++;
+                farmData.stats.totalRes += gain;
+                log('FARM', `✅ ${ids.length} île(s) récoltée(s), +${gain} res`, 'success');
+                updateStats();
+                saveData();
+                sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${gain.toLocaleString()} ressources`);
+                resolve();
+            }, () => resolve()); // résoudre aussi en cas d'erreur pour ne pas bloquer
         });
     } catch(e) {
         log('FARM', 'Erreur: ' + e.message, 'error');
