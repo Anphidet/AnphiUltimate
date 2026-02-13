@@ -228,20 +228,47 @@
         return 0;
     }
 
-    // Obtenir le niveau d'un bâtiment
+    // Obtenir le niveau d'un bâtiment — méthode robuste (pas de dépendance à la ville courante)
     function getBuildingLevel(townId, buildingId) {
         try {
+            // Méthode 1 : MM.getModels().Buildings[townId]
+            const buildings = uw.MM.getModels().Buildings;
+            if (buildings && buildings[townId]) {
+                const b = buildings[townId];
+                if (b.attributes && b.attributes[buildingId] !== undefined)
+                    return b.attributes[buildingId];
+            }
+            // Méthode 2 : town.getBuildings()
             const town = uw.ITowns.getTown(townId);
-            if (town && town.getBuildings) {
-                const buildings = town.getBuildings();
-                if (buildings && buildings.attributes) {
-                    return buildings.attributes[buildingId] || 0;
+            if (town) {
+                if (typeof town.getBuildings === 'function') {
+                    const b = town.getBuildings();
+                    if (b && b.attributes && b.attributes[buildingId] !== undefined)
+                        return b.attributes[buildingId];
+                    if (b && b[buildingId] !== undefined)
+                        return b[buildingId];
+                }
+                if (typeof town.buildings === 'function') {
+                    const b = town.buildings();
+                    if (b && b[buildingId] !== undefined) return b[buildingId];
                 }
             }
-        } catch (e) {
-            // Ignorer les erreurs
-        }
+        } catch (e) { /* silent */ }
         return 0;
+    }
+
+    // Obtenir les ressources d'une ville directement via MM (pas de dépendance à la ville courante)
+    function getResourcesForTown(townId) {
+        try {
+            const townModel = uw.MM.getModels().Town[townId];
+            return townModel?.attributes?.resources || { wood: 0, stone: 0, iron: 0 };
+        } catch(e) {
+            try {
+                const town = uw.ITowns.getTown(townId);
+                if (town && typeof town.resources === 'function') return town.resources();
+            } catch(e2) {}
+            return { wood: 0, stone: 0, iron: 0 };
+        }
     }
 
     // Vérifier si une célébration est en cours dans une ville
@@ -262,33 +289,40 @@
         return false;
     }
 
-    // Lancer une célébration — via frontend_bridge comme le ModernBot
+    // Lancer une célébration
+    // Méthode $.ajax directe avec town_id dans l'URL — fonctionne sans être sur la ville
     function makeCelebration(type, townId) {
-        try {
-            const townName = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
+        const townName = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
+        const label = { party: 'Festival', triumph: 'Procession', theater: 'Théâtre', games: 'Jeux Olympiques' }[type] || type;
+        const csrfToken = uw.Game.csrfToken;
 
-            const data = {
-                model_url:   'Celebration',
-                action_name: 'start',
-                arguments:   { celebration_type: type },
-                town_id:     townId
-            };
-
-            uw.gpAjax.ajaxPost('frontend_bridge', 'execute', data, false, function(resp) {
-                // Succès
-                updateStats(type);
-                const label = { party: 'Festival', triumph: 'Procession', theater: 'Théâtre', games: 'Jeux Olympiques' }[type] || type;
-                log('CULTURE', `${townName}: ${label} lancé(e)`, 'success');
-            }, function(err) {
-                // Erreur — ignorer "already celebrating"
-                const msg = err ? err.toString() : '';
-                if (!msg.includes('already') && !msg.includes('celebration_active')) {
-                    log('CULTURE', `${townName}: Erreur ${type} — ${msg}`, 'error');
+        uw.$.ajax({
+            type: 'POST',
+            url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
+            data: {
+                json: JSON.stringify({
+                    celebration_type: type,
+                    town_id: townId,
+                    nl_init: true
+                })
+            },
+            dataType: 'json',
+            success: function(response) {
+                const err = response?.json?.error || response?.error;
+                if (err) {
+                    const msg = err.toString();
+                    if (!msg.includes('already') && !msg.includes('celebration_active')) {
+                        log('CULTURE', `${townName}: Erreur ${label} — ${msg}`, 'error');
+                    }
+                    return;
                 }
-            });
-        } catch (e) {
-            log('CULTURE', `Erreur makeCelebration: ${e.message}`, 'error');
-        }
+                updateStats(type);
+                log('CULTURE', `${townName}: ${label} lancé(e) ✅`, 'success');
+            },
+            error: function(xhr, status, error) {
+                log('CULTURE', `${townName}: Erreur réseau ${label} — ${error}`, 'error');
+            }
+        });
     }
 
     // Vérifier et lancer les festivals
