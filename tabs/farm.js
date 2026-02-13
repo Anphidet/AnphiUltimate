@@ -198,6 +198,19 @@ function toggleFarm(enabled) {
     }
 }
 
+// Calculer le délai en ms jusqu'à 00h01 (heure locale)
+// Les ressources des villages PNJ se régénèrent à minuit
+function getMsUntilMidnightPlusOne() {
+    const now = new Date();
+    const nextRetry = new Date(now);
+    nextRetry.setHours(0, 1, 0, 0); // 00:01:00.000
+    if (nextRetry <= now) {
+        // On est déjà après 00h01 → viser le lendemain
+        nextRetry.setDate(nextRetry.getDate() + 1);
+    }
+    return nextRetry.getTime() - now.getTime();
+}
+
 async function runFarmCycle() {
     if (!farmData.enabled) return;
 
@@ -210,11 +223,21 @@ async function runFarmCycle() {
         updateIslandsStatus();
     } else {
         // Au moins une île prête → récolter
-        await executeFarmClaim();
+        const allEmpty = await executeFarmClaim();
+
+        if (allEmpty) {
+            // Tous les villages étaient vides → retry à 00h01
+            const msUntilRetry = getMsUntilMidnightPlusOne();
+            const retryTime = new Date(Date.now() + msUntilRetry);
+            const retryStr = retryTime.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            log('FARM', `Villages vides — prochain essai à ${retryStr}`, 'warning');
+            farmData.nextCheckTime = Date.now() + msUntilRetry;
+            farmData.interval = setTimeout(() => runFarmCycle(), msUntilRetry);
+            updateIslandsStatus();
+            return;
+        }
 
         // Recharger les modèles FarmTownPlayerRelation depuis le serveur
-        // OBLIGATOIRE : après claim, lootable_at en mémoire n'est pas encore mis à jour
-        // Sans ça, getNextAvailableCollection() retourne 0 en boucle infinie
         await refreshFarmRelations();
 
         const nextAvailable = getNextAvailableCollection();
@@ -283,7 +306,8 @@ async function executeFarmClaim() {
         log('FARM', `Récolte: ${ids.length} île(s), ${totalVillages} village(s) prêt(s)`, 'info');
 
         // Await le claim — la réponse serveur indique si des ressources ont été récoltées
-        await new Promise((resolve) => {
+        // Retourne true si tous les villages étaient vides (gain = 0)
+        const allEmpty = await new Promise((resolve) => {
             uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', {
                 towns: ids,
                 time_option_base:  farmData.settings.duration === 1 ? 300  : 1200,
@@ -301,10 +325,11 @@ async function executeFarmClaim() {
                     }
                 } catch(_) {}
 
-                // Si gain = 0 : villages vides, le serveur ne posera pas de cooldown
-                // → imposer un cooldown local pour éviter la boucle infinie
+                // Si gain = 0 : villages vides
+                // → imposer un cooldown local jusqu'à 00h01 pour éviter la boucle infinie
                 if (realGain === 0) {
-                    applyLocalCooldowns(list, farmData.settings.duration === 1 ? 300 : 1200);
+                    const secUntilMidnight = Math.floor(getMsUntilMidnightPlusOne() / 1000);
+                    applyLocalCooldowns(list, secUntilMidnight);
                 }
 
                 const displayGain = realGain > 0 ? realGain : ids.length * (farmData.settings.duration === 1 ? 115 : 350);
@@ -314,11 +339,13 @@ async function executeFarmClaim() {
                 updateStats();
                 saveData();
                 sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${displayGain.toLocaleString()} ressources`);
-                resolve();
+                resolve(realGain === 0); // resolve(true) = villages vides
             }, () => resolve());
         });
+        return allEmpty;
     } catch(e) {
         log('FARM', 'Erreur: ' + e.message, 'error');
+        return false;
     }
 }
 
