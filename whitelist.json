@@ -12,7 +12,7 @@
         {
             "name": "mipose",
             "playerId": 0,
-            "servers": ["180"],
+            "servers": ["fr180"],
             "modules": ["*"],
             "comment": "Dodoagrrr 179"
         },
@@ -54,14 +54,14 @@
         {
             "name": "PantRose",
             "playerId": 0,
-            "servers": ["180"],
+            "servers": ["fr180"],
             "modules": ["*"],
             "comment": "Pant Olympus"
         },
         {
             "name": "XxBesixx",
             "playerId": 0,
-            "servers": ["180"],
+            "servers": ["fr180"],
             "modules": ["*"],
             "comment": "Besix olympus"
         },
@@ -74,6 +74,7 @@
         }
     ]
 }
+
 
 
 
