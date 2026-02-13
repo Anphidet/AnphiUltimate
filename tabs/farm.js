@@ -324,9 +324,12 @@ function getIslandsWithStatus() {
     }
 
     // Pour chaque relation conquise, ranger par islandKey (x_y)
-    // Un village de farm est "disponible" si :
-    //   - relation_status === 1  (village conquis)
-    //   - lootable_at est null OU lootable_at <= now  (cooldown écoulé ou jamais récolté)
+    // Un village de farm est "disponible" si TOUTES ces conditions sont vraies :
+    //   1. relation_status === 1  (village conquis)
+    //   2. lootable_at est null OU lootable_at <= now  (cooldown écoulé ou jamais récolté)
+    //   3. Le village a des ressources disponibles (wood + stone + iron > 0)
+    //      → si tout est à 0, Grepolis ne mettra pas de cooldown même après claim
+    //      → c'est la cause de la boucle infinie quand les villages sont vides
     const islandFarmStatus = new Map(); // islandKey -> { readyCount, totalCount, minNextTime }
 
     for (const rel of relationModels) {
@@ -345,13 +348,25 @@ function getIslandsWithStatus() {
         const status = islandFarmStatus.get(islandKey);
         status.totalCount++;
 
-        const lootableAt = ra.lootable_at; // null = jamais récolté, number = timestamp cooldown
+        const lootableAt = ra.lootable_at;
+
+        // Vérifier si le village a des ressources disponibles
+        // ft.resources peut être { wood, stone, iron } ou ft.available_resources
+        const res = ft.resources || ft.available_resources || {};
+        const hasResources = (res.wood || 0) + (res.stone || 0) + (res.iron || 0) > 0;
+
+        if (!hasResources) {
+            // Village vide : pas de cooldown mais rien à récolter
+            // On l'ignore complètement — il ne doit PAS compter comme "prêt"
+            status.totalCount--; // annuler l'incrément ci-dessus
+            continue;
+        }
 
         if (lootableAt === null || lootableAt <= now) {
-            // Ce village est PRÊT (cooldown terminé ou pas encore récolté)
+            // Village prêt ET a des ressources
             status.readyCount++;
         } else {
-            // Ce village est en cooldown — retenir le prochain dispo
+            // En cooldown — retenir le prochain dispo
             if (lootableAt < status.minNextTime) {
                 status.minNextTime = lootableAt;
             }
@@ -381,16 +396,20 @@ function getIslandsWithStatus() {
         const islandKey = `${islandX}_${islandY}`;
         const farmStatus = islandFarmStatus.get(islandKey);
 
-        // Ignorer les îles sans village de farm conquis
+        // Ignorer les îles sans aucun village conquis avec des ressources
         if (!farmStatus || farmStatus.totalCount === 0) continue;
 
-        const isReady    = farmStatus.readyCount > 0;
-        // Vide = aucun village prêt (tous en cooldown)
-        const isEmpty    = !isReady;
-        // Temps en ms avant le premier village disponible (0 si déjà prêt)
+        const isReady = farmStatus.readyCount > 0;
+        const isEmpty = !isReady;
+
+        // Temps en ms avant le premier village disponible
+        // Si minNextTime === Infinity : tous les villages avec ressources sont déjà prêts
+        // ou il n'y en a aucun → on ne planifie pas de retry automatique pour cette île
         const nextAvailableMs = isReady
             ? 0
-            : (farmStatus.minNextTime === Infinity ? 0 : Math.max(0, (farmStatus.minNextTime - now) * 1000));
+            : (farmStatus.minNextTime === Infinity
+                ? 0  // aucun cooldown connu → pas de timer pour cette île
+                : Math.max(0, (farmStatus.minNextTime - now) * 1000));
 
         const townData = {
             id:         townId,
@@ -424,16 +443,20 @@ function getIslandsWithStatus() {
 function getNextAvailableCollection() {
     const islands = getIslandsWithStatus();
 
-    // Îles avec au moins un village prêt
+    // Îles avec au moins un village prêt ET avec des ressources
     const readyIslands = islands.filter(i => i.isReady);
     if (readyIslands.length > 0) return 0;
 
-    // Aucune île prête : trouver la prochaine
+    // Aucune île prête : chercher les cooldowns connus
     const times = islands
         .filter(i => i.nextAvailableMs > 0)
         .map(i => i.nextAvailableMs);
 
-    if (times.length === 0) return 60000; // fallback 1 minute
+    if (times.length === 0) {
+        // Tous les villages sont vides (resources=0) ou sans cooldown connu
+        // Attendre 5 minutes — les ressources vont se régénérer chez les PNJ
+        return 5 * 60 * 1000;
+    }
     return Math.min(...times);
 }
 
