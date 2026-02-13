@@ -20,7 +20,11 @@ let farmData = {
     cycleCount: 0,
     interval: null,
     nextCheckTime: 0,
-    lastNoIslandLog: 0
+    lastNoIslandLog: 0,
+    // Cooldowns imposés localement quand le serveur ne renvoie pas de lootable_at
+    // (cas villages vides : serveur accepte le claim sans poser de cooldown)
+    // clé = farm_town_id, valeur = timestamp (secondes) jusqu'auquel ignorer ce village
+    localCooldowns: {}
 };
 
 module.render = function(container) {
@@ -278,32 +282,97 @@ async function executeFarmClaim() {
         const totalVillages = list.reduce((a, i) => a + i.readyCount, 0);
         log('FARM', `Récolte: ${ids.length} île(s), ${totalVillages} village(s) prêt(s)`, 'info');
 
-        // Await le claim pour être sûr que le serveur a bien traité la requête
-        // avant que refreshFarmRelations ne récupère les nouveaux cooldowns
+        // Await le claim — la réponse serveur indique si des ressources ont été récoltées
         await new Promise((resolve) => {
             uw.gpAjax.ajaxPost('farm_town_overviews', 'claim_loads_multiple', {
                 towns: ids,
                 time_option_base:  farmData.settings.duration === 1 ? 300  : 1200,
                 time_option_booty: farmData.settings.duration === 1 ? 600  : 2400,
                 claim_factor: 'normal'
-            }, false, () => {
-                const gain = ids.length * (farmData.settings.duration === 1 ? 115 : 350);
+            }, false, (resp) => {
+                // Lire le gain réel dans la réponse serveur
+                let realGain = 0;
+                try {
+                    const rj = resp?.json || resp || {};
+                    if (rj.resources) {
+                        realGain = (rj.resources.wood || 0) + (rj.resources.stone || 0) + (rj.resources.iron || 0);
+                    } else if (rj.loot) {
+                        realGain = Object.values(rj.loot).reduce((s, v) => s + (v || 0), 0);
+                    }
+                } catch(_) {}
+
+                // Si gain = 0 : villages vides, le serveur ne posera pas de cooldown
+                // → imposer un cooldown local pour éviter la boucle infinie
+                if (realGain === 0) {
+                    applyLocalCooldowns(list, farmData.settings.duration === 1 ? 300 : 1200);
+                }
+
+                const displayGain = realGain > 0 ? realGain : ids.length * (farmData.settings.duration === 1 ? 115 : 350);
                 farmData.stats.cycles++;
-                farmData.stats.totalRes += gain;
-                log('FARM', `✅ ${ids.length} île(s) récoltée(s), +${gain} res`, 'success');
+                farmData.stats.totalRes += displayGain;
+                log('FARM', `✅ ${ids.length} île(s) récoltée(s), +${displayGain} res`, 'success');
                 updateStats();
                 saveData();
-                sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${gain.toLocaleString()} ressources`);
+                sendWebhook('Récolte Auto Farm', `${ids.length} îles récoltées\nGain: +${displayGain.toLocaleString()} ressources`);
                 resolve();
-            }, () => resolve()); // résoudre aussi en cas d'erreur pour ne pas bloquer
+            }, () => resolve());
         });
     } catch(e) {
         log('FARM', 'Erreur: ' + e.message, 'error');
     }
 }
 
+// Imposer un cooldown local sur tous les villages des îles récoltées
+// Utilisé quand le serveur ne renvoie pas de lootable_at (villages vides)
+function applyLocalCooldowns(islandList, durationSec) {
+    try {
+        const cooldownUntil = Math.floor(Date.now() / 1000) + durationSec;
+        const relModels = uw.MM.getOnlyCollectionByName('FarmTownPlayerRelation').models;
+        const ftModels  = uw.MM.getOnlyCollectionByName('FarmTown').models;
+        const ftById    = new Map();
+        for (const ft of ftModels) ftById.set(ft.id, ft.attributes);
+
+        let count = 0;
+        for (const rel of relModels) {
+            const ra = rel.attributes;
+            if (!ra || ra.relation_status !== 1) continue;
+            const ft = ftById.get(ra.farm_town_id);
+            if (!ft) continue;
+
+            // Vérifier si ce village est sur une île récoltée
+            const belongsToRecoltedIsland = islandList.some(island => {
+                try {
+                    const t = uw.ITowns.getTown(island.id);
+                    return t.getIslandCoordinateX() === ft.island_x &&
+                           t.getIslandCoordinateY() === ft.island_y;
+                } catch(_) { return false; }
+            });
+
+            if (belongsToRecoltedIsland) {
+                farmData.localCooldowns[ra.farm_town_id] = cooldownUntil;
+                count++;
+            }
+        }
+        if (count > 0) {
+            const mins = Math.round(durationSec / 60);
+            log('FARM', `Villages vides — cooldown local ${mins}min appliqué (${count} villages)`, 'warning');
+        }
+    } catch(e) { /* silent */ }
+}
+
+// Nettoyer les cooldowns locaux expirés
+function cleanLocalCooldowns() {
+    const now = Math.floor(Date.now() / 1000);
+    for (const id in farmData.localCooldowns) {
+        if (farmData.localCooldowns[id] <= now) {
+            delete farmData.localCooldowns[id];
+        }
+    }
+}
+
 // Obtenir la liste des îles avec leur statut - logique correcte basée sur ModernBot
 function getIslandsWithStatus() {
+    cleanLocalCooldowns(); // purger les cooldowns locaux expirés
     const now = Math.floor(Date.now() / 1000);
     const islandMap = new Map(); // clé = islandId
 
@@ -348,27 +417,28 @@ function getIslandsWithStatus() {
         const status = islandFarmStatus.get(islandKey);
         status.totalCount++;
 
+        // lootable_at sémantique :
+        //   null  = jamais récolté ou village vide (serveur ne pose pas de cooldown)
+        //   > now = en cooldown
+        //   <= now = cooldown expiré, prêt
+        //
+        // Problème : quand village vide, serveur répond OK mais lootable_at reste null
+        // → on vérifie si on a imposé un cooldown artificiel localement
         const lootableAt = ra.lootable_at;
+        const farmTownId = ra.farm_town_id;
+        const localCooldown = farmData.localCooldowns[farmTownId]; // timestamp imposé localement
 
-        // Vérifier si le village a des ressources disponibles
-        // ft.resources peut être { wood, stone, iron } ou ft.available_resources
-        const res = ft.resources || ft.available_resources || {};
-        const hasResources = (res.wood || 0) + (res.stone || 0) + (res.iron || 0) > 0;
-
-        if (!hasResources) {
-            // Village vide : pas de cooldown mais rien à récolter
-            // On l'ignore complètement — il ne doit PAS compter comme "prêt"
-            status.totalCount--; // annuler l'incrément ci-dessus
-            continue;
+        // Cooldown effectif : le max entre lootable_at serveur et cooldown local
+        let effectiveLootableAt = lootableAt;
+        if (localCooldown && (lootableAt === null || localCooldown > lootableAt)) {
+            effectiveLootableAt = localCooldown;
         }
 
-        if (lootableAt === null || lootableAt <= now) {
-            // Village prêt ET a des ressources
+        if (effectiveLootableAt === null || effectiveLootableAt <= now) {
             status.readyCount++;
         } else {
-            // En cooldown — retenir le prochain dispo
-            if (lootableAt < status.minNextTime) {
-                status.minNextTime = lootableAt;
+            if (effectiveLootableAt < status.minNextTime) {
+                status.minNextTime = effectiveLootableAt;
             }
         }
     }
