@@ -77,25 +77,17 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Récupérer les célébrations en cours
+    // Récupérer les célébrations en cours — identique au ModernBot
     function getCelebrationsList(type) {
-        const list = [];
         try {
-            const celebrations = uw.MM.getModels().Celebration;
-            if (celebrations) {
-                for (let id in celebrations) {
-                    const celeb = celebrations[id];
-                    if (celeb && celeb.attributes) {
-                        if (celeb.attributes.celebration_type === type) {
-                            list.push(celeb.attributes.town_id);
-                        }
-                    }
-                }
-            }
+            const celebrationModels = uw.MM.getModels().Celebration;
+            if (typeof celebrationModels === 'undefined') return [];
+            return Object.values(celebrationModels)
+                .filter(c => c && c.attributes && c.attributes.celebration_type === type)
+                .map(c => c.attributes.town_id);
         } catch (e) {
-            // Ignorer les erreurs
+            return [];
         }
-        return list;
     }
 
     // Récupérer l'or du joueur
@@ -270,26 +262,28 @@
         return false;
     }
 
-    // Lancer une célébration
+    // Lancer une célébration — via frontend_bridge comme le ModernBot
     function makeCelebration(type, townId) {
         try {
+            const townName = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
+
             const data = {
-                celebration_type: type,
-                town_id: townId
+                model_url:   'Celebration',
+                action_name: 'start',
+                arguments:   { celebration_type: type },
+                town_id:     townId
             };
-            
-            uw.gpAjax.ajaxPost('building_place', 'start_celebration', data, null, {
-                success: function() {
-                    stats.lastCelebration = new Date().toISOString();
-                    updateStats(type);
-                    saveConfig();
-                    updateStatsDisplay();
-                },
-                error: function(error) {
-                    // Ne log que les erreurs importantes (pas "already celebrating")
-                    if (error && !error.toString().includes('already')) {
-                        log('CULTURE', `Erreur ${type}: ${error}`, 'error');
-                    }
+
+            uw.gpAjax.ajaxPost('frontend_bridge', 'execute', data, false, function(resp) {
+                // Succès
+                updateStats(type);
+                const label = { party: 'Festival', triumph: 'Procession', theater: 'Théâtre', games: 'Jeux Olympiques' }[type] || type;
+                log('CULTURE', `${townName}: ${label} lancé(e)`, 'success');
+            }, function(err) {
+                // Erreur — ignorer "already celebrating"
+                const msg = err ? err.toString() : '';
+                if (!msg.includes('already') && !msg.includes('celebration_active')) {
+                    log('CULTURE', `${townName}: Erreur ${type} — ${msg}`, 'error');
                 }
             });
         } catch (e) {
@@ -336,9 +330,10 @@
     async function checkTriumph() {
         try {
             let max = 10;
+            // Récupération killpoints identique au ModernBot
             const killpoints = uw.MM.getModelByNameAndPlayerId('PlayerKillpoints').attributes;
             let available = killpoints.att + killpoints.def - killpoints.used;
-            
+
             if (available < 300) return;
 
             const triumph = getCelebrationsList('triumph');
