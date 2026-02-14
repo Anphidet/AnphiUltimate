@@ -289,39 +289,41 @@
         return false;
     }
 
-    // Lancer une célébration
-    // Méthode $.ajax directe avec town_id dans l'URL — fonctionne sans être sur la ville
+    // Lancer une célébration — retourne une Promise<bool> (true = succès confirmé serveur)
     function makeCelebration(type, townId) {
-        const townName = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
-        const label = { party: 'Festival', triumph: 'Procession', theater: 'Théâtre', games: 'Jeux Olympiques' }[type] || type;
+        const townName  = uw.ITowns.getTown(townId)?.getName() || `Ville ${townId}`;
+        const label     = { party: 'Festival', triumph: 'Procession', theater: 'Théâtre', games: 'Jeux Olympiques' }[type] || type;
         const csrfToken = uw.Game.csrfToken;
 
-        uw.$.ajax({
-            type: 'POST',
-            url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
-            data: {
-                json: JSON.stringify({
-                    celebration_type: type,
-                    town_id: townId,
-                    nl_init: true
-                })
-            },
-            dataType: 'json',
-            success: function(response) {
-                const err = response?.json?.error || response?.error;
-                if (err) {
-                    const msg = err.toString();
-                    if (!msg.includes('already') && !msg.includes('celebration_active')) {
-                        log('CULTURE', `${townName}: Erreur ${label} — ${msg}`, 'error');
+        return new Promise((resolve) => {
+            uw.$.ajax({
+                type: 'POST',
+                url: `/game/building_place?town_id=${townId}&action=start_celebration&h=${csrfToken}`,
+                data: {
+                    json: JSON.stringify({
+                        celebration_type: type,
+                        town_id: townId,
+                        nl_init: true
+                    })
+                },
+                dataType: 'json',
+                success: function(response) {
+                    const err = response?.json?.error || response?.error;
+                    if (err) {
+                        // Loguer TOUTES les erreurs sans filtre — essentiel pour diagnostiquer
+                        log('CULTURE', `${townName}: Echec ${label} — ${err}`, 'error');
+                        resolve(false);
+                        return;
                     }
-                    return;
+                    updateStats(type);
+                    log('CULTURE', `${townName}: ${label} lance ✅`, 'success');
+                    resolve(true);
+                },
+                error: function(xhr, status, error) {
+                    log('CULTURE', `${townName}: Erreur reseau ${label} — ${error}`, 'error');
+                    resolve(false);
                 }
-                updateStats(type);
-                log('CULTURE', `${townName}: ${label} lancé(e) ✅`, 'success');
-            },
-            error: function(xhr, status, error) {
-                log('CULTURE', `${townName}: Erreur réseau ${label} — ${error}`, 'error');
-            }
+            });
         });
     }
 
@@ -344,8 +346,8 @@
                 const { wood, stone, iron } = town.resources();
                 if (wood < 15000 || stone < 18000 || iron < 15000) continue;
                 
-                makeCelebration('party', townId);
-                launched++;
+                const ok = await makeCelebration('party', townId);
+                if (ok) launched++;
                 await sleep(750);
                 max -= 1;
                 
@@ -381,9 +383,8 @@
                 
                 if (available < 300) break;
                 
-                makeCelebration('triumph', townId);
-                launched++;
-                available -= 300;
+                const ok = await makeCelebration('triumph', townId);
+                if (ok) { launched++; available -= 300; }
                 await sleep(500);
                 max -= 1;
                 
@@ -417,8 +418,8 @@
                 const { wood, stone, iron } = town.resources();
                 if (wood < 10000 || stone < 12000 || iron < 10000) continue;
                 
-                makeCelebration('theater', townId);
-                launched++;
+                const ok = await makeCelebration('theater', townId);
+                if (ok) launched++;
                 await sleep(500);
                 max -= 1;
                 
@@ -437,35 +438,36 @@
     async function checkGames() {
         try {
             let max = 10;
-            const games = getCelebrationsList('games');
-            
+
             const gold = getGoldForPlayer();
             if (gold < 50) return;
 
             let availableGold = gold;
             const goldPerTown = 50;
             let launched = 0;
-            
+
             for (let townId in uw.ITowns.towns) {
-                if (games.includes(parseInt(townId))) continue;
-                
                 const settings = getTownSettings(townId);
                 if (!settings.games) continue;
-                
+
                 const town = uw.ITowns.towns[townId];
                 if (town.getBuildings().attributes.academy < 30) continue;
-                
+
+                // Utiliser getCelebrationInProgress — fonctionne pour tous les types
+                // getCelebrationsList('games') ne marche pas car le type interne des JO
+                // dans Grepolis n'est pas 'games' mais une autre valeur ('olympia', etc.)
+                if (getCelebrationInProgress(townId)) continue;
+
                 if (availableGold < goldPerTown) break;
-                
-                makeCelebration('games', townId);
-                launched++;
-                availableGold -= goldPerTown;
+
+                const ok = await makeCelebration('games', townId);
+                if (ok) { launched++; availableGold -= goldPerTown; }
                 await sleep(750);
                 max -= 1;
-                
+
                 if (max <= 0) break;
             }
-            
+
             if (launched > 0) {
                 log('CULTURE', `${launched} jeux olympique(s) lancé(s)`, 'success');
             }
