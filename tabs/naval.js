@@ -924,20 +924,13 @@ function runTargetMode(townId) {
             continue;
         }
         
-        const maxByWood = woodCost > 0 ? Math.floor(res.wood / woodCost) : 999999;
-        const maxByStone = stoneCost > 0 ? Math.floor(res.stone / stoneCost) : 999999;
-        const maxByIron = ironCost > 0 ? Math.floor(res.iron / ironCost) : 999999;
-        const maxAffordable = Math.min(maxByWood, maxByStone, maxByIron);
+        // On tente de recruter le nombre nécessaire directement sans vérifier
+        // les ressources en local. Si un boost/amélioration est actif, le coût
+        // réel est réduit côté serveur et le recrutement sera accepté même si
+        // le calcul local semblerait insuffisant.
+        const toRecruit = needed;
         
-        if (maxAffordable <= 0) {
-            log('NAVAL', `[${cityName}] ${unitData.name}: Ressources insuffisantes (besoin: ${woodCost}/${stoneCost}/${ironCost})`, 'info');
-            continue;
-        }
-        
-        const toRecruit = Math.min(needed, maxAffordable);
-        if (toRecruit <= 0) continue;
-        
-        log('NAVAL', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit} (max ressources: ${maxAffordable}, besoin: ${needed})`, 'info');
+        log('NAVAL', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, tentative recrutement ${toRecruit} (besoin: ${needed})`, 'info');
         recruitShips(cityId, unitId, toRecruit, unitData.name, function() {
             updateTargetsGrid();
         });
@@ -1045,15 +1038,12 @@ function runQueueMode(townId) {
         return;
     }
     
-    const cost = unitData.resources;
-    const res = getResourcesForTown(cityId);
-    
-    if (res.wood < cost.wood * order.count || res.stone < cost.stone * order.count || res.iron < cost.iron * order.count) {
-        log('NAVAL', '[' + cityName + '] Ressources insuffisantes pour ' + unitData.name, 'warning');
-        return;
-    }
-    
     const settings = getNavalTownSettings(cityId);
+
+    // On tente directement le recrutement sans vérifier les ressources localement.
+    // Si un boost (amélioration de coût) est actif, le serveur acceptera même si
+    // le calcul local semblerait insuffisant. Le serveur retournera une erreur si
+    // vraiment impossible.
     recruitShips(cityId, order.id, order.count, unitData.name, () => {
         if (settings.recruitMode === 'loop') {
             queue.push(queue.shift());
@@ -1075,7 +1065,13 @@ function recruitShips(cityId, unitId, count, unitName, callback) {
         dataType: 'json',
         success: function(response) {
             if (response?.json?.error) {
-                log('NAVAL', 'Erreur: ' + response.json.error, 'error');
+                const errMsg = response.json.error;
+                // Le serveur indique manque de ressources même avec boost = vraiment insuffisant
+                if (/resource|ressource|not enough|insuffi/i.test(errMsg)) {
+                    log('NAVAL', `[${unitName}] Ressources réellement insuffisantes (même avec boost): ${errMsg}`, 'warning');
+                } else {
+                    log('NAVAL', 'Erreur serveur: ' + errMsg, 'error');
+                }
                 return;
             }
             
