@@ -741,6 +741,8 @@ function runTargetMode(townId) {
     const unitsInQueue = getUnitsInQueueForTown(cityId);
     let recruited = false;
     
+    log('RECRUIT', `[${cityName}] Ressources: ${res.wood}/${res.stone}/${res.iron}`, 'info');
+    
     for (const unitId in targets) {
         const targetCount = targets[unitId];
         const totalGlobal = globalUnits[unitId] || 0;
@@ -751,20 +753,21 @@ function runTargetMode(townId) {
         if (needed <= 0) continue;
         
         const unitData = uw.GameData.units[unitId];
-        if (!unitData) continue;
+        if (!unitData) {
+            log('RECRUIT', `[${cityName}] Unite ${unitId} non trouvee dans GameData`, 'warning');
+            continue;
+        }
         
-        const cost = unitData.resources;
-        const maxAffordable = Math.min(
-            Math.floor(res.wood / cost.wood),
-            Math.floor(res.stone / cost.stone),
-            Math.floor(res.iron / cost.iron)
-        );
+        // On tente de recruter le nombre nécessaire directement sans vérifier
+        // les ressources en local. Si un boost/amélioration est actif, le coût
+        // réel est réduit côté serveur et le recrutement sera accepté même si
+        // le calcul local semblerait insuffisant.
+        const toRecruit = needed;
         
-        const toRecruit = Math.min(needed, maxAffordable);
-        if (toRecruit <= 0) continue;
-        
-        log('RECRUIT', `[${cityName}] Objectif ${unitData.name}: ${grandTotal}/${targetCount}, recrute ${toRecruit}`, 'info');
-        recruitUnits(cityId, unitId, toRecruit, unitData.name);
+        log('RECRUIT', `[${cityName}] ${unitData.name}: ${grandTotal}/${targetCount}, tentative recrutement ${toRecruit} (besoin: ${needed})`, 'info');
+        recruitUnits(cityId, unitId, toRecruit, unitData.name, function() {
+            updateTargetsGrid();
+        });
         recruited = true;
         break;
     }
@@ -799,15 +802,12 @@ function runQueueMode(townId) {
         return;
     }
     
-    const cost = unitData.resources;
-    const res = getResourcesForTown(cityId);
-    
-    if (res.wood < cost.wood * order.count || res.stone < cost.stone * order.count || res.iron < cost.iron * order.count) {
-        log('RECRUIT', '[' + cityName + '] Ressources insuffisantes pour ' + unitData.name, 'warning');
-        return;
-    }
-    
     const settings = getTownSettings(cityId);
+
+    // On tente directement le recrutement sans vérifier les ressources localement.
+    // Si un boost (amélioration de coût) est actif, le serveur acceptera même si
+    // le calcul local semblerait insuffisant. Le serveur retournera une erreur si
+    // vraiment impossible.
     recruitUnits(cityId, order.id, order.count, unitData.name, () => {
         if (settings.recruitMode === 'loop') {
             queue.push(queue.shift());
