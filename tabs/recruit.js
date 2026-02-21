@@ -95,10 +95,17 @@ function getUnitsInQueueForTown(townId) {
                 for (let id in models.UnitOrder) {
                     const order = models.UnitOrder[id];
                     const attrs = order.attributes || order;
-                    if (attrs.town_id == townId && attrs.kind === 'barracks') {
+                    if (attrs.town_id == townId) {
+                        // Exclure les ordres navals, inclure tout le reste (barracks, train, etc.)
+                        if (attrs.kind === 'naval' || attrs.kind === 'docks') continue;
                         const unitId = attrs.unit_type;
+                        if (!unitId) continue;
+                        try {
+                            const unitData = uw.GameData.units[unitId];
+                            if (unitData && unitData.is_naval) continue;
+                        } catch(e2) {}
                         const count = attrs.units_left || attrs.count || 1;
-                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                        queued[unitId] = (queued[unitId] || 0) + count;
                     }
                 }
             }
@@ -113,6 +120,7 @@ function getGlobalUnitsForTown(townId) {
         const town = uw.ITowns.getTown(townId);
         if (!town) return globalUnits;
         
+        // Unités en ville
         if (typeof town.units === 'function') {
             const inTown = town.units();
             for (let unitId in inTown) {
@@ -122,6 +130,7 @@ function getGlobalUnitsForTown(townId) {
             }
         }
         
+        // Unités hors ville (en déplacement depuis cette ville)
         if (typeof town.unitsOuter === 'function') {
             const outer = town.unitsOuter();
             if (outer) {
@@ -133,8 +142,34 @@ function getGlobalUnitsForTown(townId) {
             }
         }
         
+        // Unités hors ville (autre méthode)
+        if (typeof town.unitsOuterTown === 'function') {
+            const outerTown = town.unitsOuterTown();
+            if (outerTown) {
+                for (let unitId in outerTown) {
+                    if (outerTown[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + outerTown[unitId];
+                    }
+                }
+            }
+        }
+        
+        // Unités en support envoyées depuis cette ville
+        if (typeof town.unitsSupport === 'function') {
+            const support = town.unitsSupport();
+            if (support) {
+                for (let unitId in support) {
+                    if (support[unitId] > 0) {
+                        globalUnits[unitId] = (globalUnits[unitId] || 0) + support[unitId];
+                    }
+                }
+            }
+        }
+        
         if (uw.MM && uw.MM.getModels) {
             const models = uw.MM.getModels();
+            
+            // Mouvements/commandes terrestres
             if (models.Movements || models.Commands) {
                 const mvModel = models.Movements || models.Commands;
                 for (let id in mvModel) {
@@ -143,10 +178,12 @@ function getGlobalUnitsForTown(townId) {
                     if ((attrs.origin_town_id == townId || attrs.home_town_id == townId) && attrs.units) {
                         const units = attrs.units;
                         for (let unitId in units) {
-                            const unitData = uw.GameData.units[unitId];
-                            if (units[unitId] > 0 && unitData && !unitData.is_naval) {
-                                globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
-                            }
+                            try {
+                                const unitData = uw.GameData.units[unitId];
+                                if (units[unitId] > 0 && unitData && !unitData.is_naval) {
+                                    globalUnits[unitId] = (globalUnits[unitId] || 0) + units[unitId];
+                                }
+                            } catch(e2) {}
                         }
                     }
                 }
@@ -168,10 +205,17 @@ function getUnitsInQueue() {
                 for (let id in models.UnitOrder) {
                     const order = models.UnitOrder[id];
                     const attrs = order.attributes || order;
-                    if (attrs.town_id == townId && attrs.kind === 'barracks') {
+                    if (attrs.town_id == townId) {
+                        // Exclure les ordres navals, inclure tout le reste
+                        if (attrs.kind === 'naval' || attrs.kind === 'docks') continue;
                         const unitId = attrs.unit_type;
+                        if (!unitId) continue;
+                        try {
+                            const unitData = uw.GameData.units[unitId];
+                            if (unitData && unitData.is_naval) continue;
+                        } catch(e2) {}
                         const count = attrs.units_left || attrs.count || 1;
-                        if (unitId) queued[unitId] = (queued[unitId] || 0) + count;
+                        queued[unitId] = (queued[unitId] || 0) + count;
                     }
                 }
             }
